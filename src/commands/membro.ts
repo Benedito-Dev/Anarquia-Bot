@@ -1,0 +1,303 @@
+import {
+  ChatInputCommandInteraction,
+  EmbedBuilder,
+  SlashCommandBuilder,
+} from "discord.js";
+import db from "../database/db";
+import { CARGOS_VALIDOS, CARGOS_ADMIN, getCargoLabel, getMetaSemanal, getSemanaAtual } from "../utils/semana";
+
+export const data = new SlashCommandBuilder()
+  .setName("membro")
+  .setDescription("Comandos de membros (admin)")
+  .addSubcommand((sub) =>
+    sub
+      .setName("cadastrar")
+      .setDescription("Cadastrar membro na familia (admin)")
+      .addUserOption((opt) =>
+        opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("cargo")
+          .setDescription("Cargo do membro")
+          .setRequired(true)
+          .addChoices(
+            { name: "Iniciante", value: "iniciante" },
+            { name: "Membro", value: "membro" },
+            { name: "Farmer Veterano", value: "farmer veterano" },
+            { name: "Gerente", value: "gerente" },
+            { name: "Sublider", value: "sublider" },
+            { name: "Lider", value: "lider" },
+          ),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("promover")
+      .setDescription("Promover membro (admin)")
+      .addUserOption((opt) =>
+        opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("cargo")
+          .setDescription("Novo cargo")
+          .setRequired(true)
+          .addChoices(
+            { name: "Iniciante", value: "iniciante" },
+            { name: "Membro", value: "membro" },
+            { name: "Farmer Veterano", value: "farmer veterano" },
+            { name: "Gerente", value: "gerente" },
+            { name: "Sublider", value: "sublider" },
+            { name: "Lider", value: "lider" },
+          ),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub.setName("listar").setDescription("Listar todos os membros"),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("remover")
+      .setDescription("Remover membro da familia (admin)")
+      .addUserOption((opt) =>
+        opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("perfil")
+      .setDescription("Ver historico completo de um membro (admin)")
+      .addUserOption((opt) =>
+        opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
+      ),
+  );
+
+export async function execute(interaction: ChatInputCommandInteraction) {
+  const subcommand = interaction.options.getSubcommand();
+
+  if (subcommand !== "listar") {
+    const totalMembros = db.prepare("SELECT COUNT(*) as total FROM membros WHERE ativo = 1").get() as { total: number };
+    const isFirstSetup = totalMembros.total === 0 && subcommand === "cadastrar";
+
+    if (!isFirstSetup) {
+      const admin = db
+        .prepare("SELECT * FROM membros WHERE discord_id = ?")
+        .get(interaction.user.id) as { cargo: string } | undefined;
+
+      if (!admin || !CARGOS_ADMIN.includes(admin.cargo.toLowerCase())) {
+        await interaction.reply({
+          content: "Apenas **Sublider ou Lider** pode gerenciar membros.",
+          ephemeral: true,
+        });
+        return;
+      }
+    }
+  }
+
+  if (subcommand === "cadastrar") {
+    await cadastrar(interaction);
+  } else if (subcommand === "promover") {
+    await promover(interaction);
+  } else if (subcommand === "listar") {
+    await listar(interaction);
+  } else if (subcommand === "remover") {
+    await remover(interaction);
+  } else if (subcommand === "perfil") {
+    await perfil(interaction);
+  }
+}
+
+async function cadastrar(interaction: ChatInputCommandInteraction) {
+  const usuario = interaction.options.getUser("usuario", true);
+  const cargo = interaction.options.getString("cargo", true);
+
+  if (!CARGOS_VALIDOS.includes(cargo)) {
+    await interaction.reply({ content: `Cargo invalido. Validos: ${CARGOS_VALIDOS.join(", ")}`, ephemeral: true });
+    return;
+  }
+
+  const existente = db.prepare("SELECT * FROM membros WHERE discord_id = ?").get(usuario.id);
+  if (existente) {
+    await interaction.reply({ content: `**${usuario.displayName}** ja esta cadastrado.`, ephemeral: true });
+    return;
+  }
+
+  db.prepare("INSERT INTO membros (discord_id, nome, cargo) VALUES (?, ?, ?)").run(
+    usuario.id,
+    usuario.displayName,
+    cargo,
+  );
+
+  const meta = getMetaSemanal(cargo);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x2ecc71)
+    .setTitle("Membro Cadastrado!")
+    .addFields(
+      { name: "Nome", value: usuario.displayName, inline: true },
+      { name: "Cargo", value: getCargoLabel(cargo), inline: true },
+      { name: "Meta semanal", value: meta > 0 ? `${meta} cobres` : "Sem meta", inline: true },
+    )
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+async function promover(interaction: ChatInputCommandInteraction) {
+  const usuario = interaction.options.getUser("usuario", true);
+  const novoCargo = interaction.options.getString("cargo", true);
+
+  const membro = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ?")
+    .get(usuario.id) as { id: number; cargo: string; nome: string } | undefined;
+
+  if (!membro) {
+    await interaction.reply({ content: `**${usuario.displayName}** nao esta cadastrado.`, ephemeral: true });
+    return;
+  }
+
+  const cargoAnterior = membro.cargo;
+  db.prepare("UPDATE membros SET cargo = ?, nome = ? WHERE discord_id = ?").run(novoCargo, usuario.displayName, usuario.id);
+
+  const embed = new EmbedBuilder()
+    .setColor(0xf1c40f)
+    .setTitle("Membro Promovido!")
+    .addFields(
+      { name: "Nome", value: usuario.displayName, inline: true },
+      { name: "Cargo anterior", value: getCargoLabel(cargoAnterior), inline: true },
+      { name: "Novo cargo", value: getCargoLabel(novoCargo), inline: true },
+      { name: "Nova meta", value: getMetaSemanal(novoCargo) > 0 ? `${getMetaSemanal(novoCargo)} cobres/semana` : "Sem meta", inline: true },
+    )
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+async function listar(interaction: ChatInputCommandInteraction) {
+  const membros = db
+    .prepare("SELECT discord_id, nome, cargo FROM membros WHERE ativo = 1 ORDER BY CASE cargo WHEN 'lider' THEN 1 WHEN 'sublider' THEN 2 WHEN 'gerente' THEN 3 WHEN 'farmer veterano' THEN 4 WHEN 'membro' THEN 5 WHEN 'iniciante' THEN 6 END")
+    .all() as Array<{ discord_id: string; nome: string; cargo: string }>;
+
+  if (membros.length === 0) {
+    await interaction.reply({ content: "Nenhum membro cadastrado.", ephemeral: true });
+    return;
+  }
+
+  let texto = "";
+  let cargoAtual = "";
+
+  for (const m of membros) {
+    if (m.cargo !== cargoAtual) {
+      cargoAtual = m.cargo;
+      texto += `\n**— ${getCargoLabel(m.cargo)} —**\n`;
+    }
+    const meta = getMetaSemanal(m.cargo);
+    texto += `<@${m.discord_id}> — Meta: ${meta > 0 ? `${meta} cobres` : "Sem meta"}\n`;
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle(`Membros da Familia (${membros.length})`)
+    .setDescription(texto)
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+async function remover(interaction: ChatInputCommandInteraction) {
+  const usuario = interaction.options.getUser("usuario", true);
+
+  const membro = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ?")
+    .get(usuario.id) as { id: number; nome: string } | undefined;
+
+  if (!membro) {
+    await interaction.reply({ content: `**${usuario.displayName}** nao esta cadastrado.`, ephemeral: true });
+    return;
+  }
+
+  db.prepare("UPDATE membros SET ativo = 0 WHERE discord_id = ?").run(usuario.id);
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xe74c3c)
+        .setTitle("Membro Removido")
+        .setDescription(`**${membro.nome}** foi removido da familia.`)
+        .setTimestamp(),
+    ],
+  });
+}
+
+async function perfil(interaction: ChatInputCommandInteraction) {
+  const usuario = interaction.options.getUser("usuario", true);
+  const semana = getSemanaAtual();
+
+  const membro = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ?")
+    .get(usuario.id) as { id: number; nome: string; cargo: string; criado_em: string } | undefined;
+
+  if (!membro) {
+    await interaction.reply({ content: `**${usuario.displayName}** nao esta cadastrado.`, ephemeral: true });
+    return;
+  }
+
+  // Farm da semana
+  const farmSemana = db
+    .prepare("SELECT COALESCE(SUM(cobres), 0) as cobres, COALESCE(SUM(aluminios), 0) as aluminios, COUNT(*) as entregas FROM farm_entregas WHERE membro_id = ? AND semana = ?")
+    .get(membro.id, semana) as { cobres: number; aluminios: number; entregas: number };
+
+  const meta = getMetaSemanal(membro.cargo);
+  const progresso = meta > 0 ? Math.min(100, Math.round((farmSemana.cobres / meta) * 100)) : 100;
+
+  // Ganhos farm da semana
+  const ganhosFarm = db
+    .prepare("SELECT COALESCE(SUM(fp.valor_pago), 0) as total FROM farmer_pagamentos fp JOIN farm_entregas fe ON fp.farm_entrega_id = fe.id WHERE fp.membro_id = ? AND fe.semana = ?")
+    .get(membro.id, semana) as { total: number };
+
+  // Vendas da semana
+  const vendasSemana = db
+    .prepare("SELECT COALESCE(SUM(valor_vendedor), 0) as ganhos, COALESCE(SUM(quantidade_produtos), 0) as produtos, COUNT(*) as qtd FROM vendas WHERE vendedor_discord_id = ? AND criado_em >= date('now', 'weekday 0', '-6 days')")
+    .get(usuario.id) as { ganhos: number; produtos: number; qtd: number };
+
+  // Bonus da semana
+  const bonusSemana = db
+    .prepare("SELECT COALESCE(SUM(valor), 0) as total, COUNT(*) as qtd FROM bonus_log WHERE membro_id = ? AND semana = ?")
+    .get(membro.id, semana) as { total: number; qtd: number };
+
+  // Acoes da semana
+  const acoesSemana = db
+    .prepare("SELECT COUNT(*) as qtd, COALESCE(SUM(valor_recebido), 0) as total FROM acao_participantes WHERE discord_id = ? AND criado_em >= date('now', 'weekday 0', '-6 days')")
+    .get(usuario.id) as { qtd: number; total: number };
+
+  // Total geral da semana
+  const totalSemana = ganhosFarm.total + vendasSemana.ganhos + bonusSemana.total + acoesSemana.total;
+
+  // Farm historico total
+  const farmTotal = db
+    .prepare("SELECT COALESCE(SUM(cobres), 0) as cobres, COUNT(*) as entregas FROM farm_entregas WHERE membro_id = ?")
+    .get(membro.id) as { cobres: number; entregas: number };
+
+  const embed = new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle(`Perfil — ${membro.nome}`)
+    .addFields(
+      { name: "Cargo", value: getCargoLabel(membro.cargo), inline: true },
+      { name: "Membro desde", value: membro.criado_em.split(" ")[0], inline: true },
+      { name: "\u200b", value: "\u200b", inline: true },
+      { name: "━━━ Semana Atual ━━━", value: "\u200b" },
+      { name: "🌾 Farm", value: `${farmSemana.cobres} cobres | ${farmSemana.entregas} entregas\nMeta: ${meta > 0 ? `${progresso}% (${farmSemana.cobres}/${meta})` : "Sem meta"}`, inline: true },
+      { name: "🛒 Vendas", value: `${vendasSemana.produtos} produtos (${vendasSemana.qtd} vendas)`, inline: true },
+      { name: "⚔️ Acoes", value: `${acoesSemana.qtd} acoes | $${acoesSemana.total.toLocaleString()}`, inline: true },
+      { name: "💰 Ganhos farm", value: `$${ganhosFarm.total.toLocaleString()}`, inline: true },
+      { name: "💰 Ganhos vendas", value: `$${vendasSemana.ganhos.toLocaleString()}`, inline: true },
+      { name: "🎉 Bonus", value: `$${bonusSemana.total.toLocaleString()} (${bonusSemana.qtd}x)`, inline: true },
+      { name: "📊 Total da semana", value: `**$${totalSemana.toLocaleString()}**`, inline: true },
+      { name: "━━━ Historico Geral ━━━", value: "\u200b" },
+      { name: "Total farmado", value: `${farmTotal.cobres} cobres | ${farmTotal.entregas} entregas`, inline: true },
+    )
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed] });
+}

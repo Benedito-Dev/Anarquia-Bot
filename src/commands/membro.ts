@@ -18,6 +18,12 @@ export const data = new SlashCommandBuilder()
       )
       .addStringOption((opt) =>
         opt
+          .setName("passaporte")
+          .setDescription("ID do membro no RP (passaporte)")
+          .setRequired(true),
+      )
+      .addStringOption((opt) =>
+        opt
           .setName("cargo")
           .setDescription("Cargo do membro")
           .setRequired(true)
@@ -66,6 +72,17 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub
+      .setName("passaporte")
+      .setDescription("Definir passaporte (ID no RP) de um membro (admin)")
+      .addUserOption((opt) =>
+        opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
+      )
+      .addIntegerOption((opt) =>
+        opt.setName("id").setDescription("ID do passaporte no RP").setRequired(true).setMinValue(1),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
       .setName("perfil")
       .setDescription("Ver historico completo de um membro (admin)")
       .addUserOption((opt) =>
@@ -103,6 +120,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await listar(interaction);
   } else if (subcommand === "remover") {
     await remover(interaction);
+  } else if (subcommand === "passaporte") {
+    await definirPassaporte(interaction);
   } else if (subcommand === "perfil") {
     await perfil(interaction);
   }
@@ -111,6 +130,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 async function cadastrar(interaction: ChatInputCommandInteraction) {
   const usuario = interaction.options.getUser("usuario", true);
   const cargo = interaction.options.getString("cargo", true);
+  const passaporte = interaction.options.getString("passaporte", true);
 
   if (!CARGOS_VALIDOS.includes(cargo)) {
     await interaction.reply({ content: `Cargo invalido. Validos: ${CARGOS_VALIDOS.join(", ")}`, ephemeral: true });
@@ -123,9 +143,16 @@ async function cadastrar(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  db.prepare("INSERT INTO membros (discord_id, nome, cargo) VALUES (?, ?, ?)").run(
+  const passaporteExistente = db.prepare("SELECT * FROM membros WHERE passaporte = ?").get(passaporte);
+  if (passaporteExistente) {
+    await interaction.reply({ content: `Passaporte **${passaporte}** ja esta em uso.`, ephemeral: true });
+    return;
+  }
+
+  db.prepare("INSERT INTO membros (discord_id, nome, passaporte, cargo) VALUES (?, ?, ?, ?)").run(
     usuario.id,
     usuario.displayName,
+    passaporte,
     cargo,
   );
 
@@ -136,8 +163,9 @@ async function cadastrar(interaction: ChatInputCommandInteraction) {
     .setTitle("Membro Cadastrado!")
     .addFields(
       { name: "Nome", value: usuario.displayName, inline: true },
+      { name: "Passaporte", value: passaporte, inline: true },
       { name: "Cargo", value: getCargoLabel(cargo), inline: true },
-      { name: "Meta semanal", value: meta > 0 ? `${meta} cobres` : "Sem meta", inline: true },
+      { name: "Meta diaria", value: meta > 0 ? `${meta} cobres` : "Sem meta", inline: true },
     )
     .setTimestamp();
 
@@ -176,8 +204,8 @@ async function promover(interaction: ChatInputCommandInteraction) {
 
 async function listar(interaction: ChatInputCommandInteraction) {
   const membros = db
-    .prepare("SELECT discord_id, nome, cargo FROM membros WHERE ativo = 1 ORDER BY CASE cargo WHEN 'lider' THEN 1 WHEN 'sublider' THEN 2 WHEN 'gerente' THEN 3 WHEN 'farmer veterano' THEN 4 WHEN 'membro' THEN 5 WHEN 'iniciante' THEN 6 END")
-    .all() as Array<{ discord_id: string; nome: string; cargo: string }>;
+    .prepare("SELECT discord_id, nome, passaporte, cargo FROM membros WHERE ativo = 1 ORDER BY CASE cargo WHEN 'lider' THEN 1 WHEN 'sublider' THEN 2 WHEN 'gerente' THEN 3 WHEN 'farmer veterano' THEN 4 WHEN 'membro' THEN 5 WHEN 'iniciante' THEN 6 END")
+    .all() as Array<{ discord_id: string; nome: string; passaporte: string | null; cargo: string }>;
 
   if (membros.length === 0) {
     await interaction.reply({ content: "Nenhum membro cadastrado.", ephemeral: true });
@@ -192,8 +220,8 @@ async function listar(interaction: ChatInputCommandInteraction) {
       cargoAtual = m.cargo;
       texto += `\n**— ${getCargoLabel(m.cargo)} —**\n`;
     }
-    const meta = getMetaSemanal(m.cargo);
-    texto += `<@${m.discord_id}> — Meta: ${meta > 0 ? `${meta} cobres` : "Sem meta"}\n`;
+    const passaporte = m.passaporte ? `[${m.passaporte}]` : "[sem passaporte]";
+    texto += `<@${m.discord_id}> ${passaporte}\n`;
   }
 
   const embed = new EmbedBuilder()
@@ -219,12 +247,59 @@ async function remover(interaction: ChatInputCommandInteraction) {
 
   db.prepare("UPDATE membros SET ativo = 0 WHERE discord_id = ?").run(usuario.id);
 
+  // Tentar dar kick no Discord
+  let kickStatus = "";
+  try {
+    const membroGuild = await interaction.guild?.members.fetch(usuario.id);
+    if (membroGuild) {
+      await membroGuild.kick("Removido da familia pelo sistema");
+      kickStatus = "✅ Kick aplicado no Discord";
+    }
+  } catch {
+    kickStatus = "⚠️ Nao foi possivel dar kick (verifique as permissoes do bot)";
+  }
+
   await interaction.reply({
     embeds: [
       new EmbedBuilder()
         .setColor(0xe74c3c)
         .setTitle("Membro Removido")
-        .setDescription(`**${membro.nome}** foi removido da familia.`)
+        .setDescription(`**${membro.nome}** foi removido da familia.\n${kickStatus}`)
+        .setTimestamp(),
+    ],
+  });
+}
+
+async function definirPassaporte(interaction: ChatInputCommandInteraction) {
+  const usuario = interaction.options.getUser("usuario", true);
+  const id = interaction.options.getInteger("id", true);
+
+  const membro = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ?")
+    .get(usuario.id) as { id: number; nome: string } | undefined;
+
+  if (!membro) {
+    await interaction.reply({ content: `**${usuario.displayName}** nao esta cadastrado.`, ephemeral: true });
+    return;
+  }
+
+  const duplicado = db.prepare("SELECT * FROM membros WHERE passaporte = ? AND discord_id != ?").get(id, usuario.id);
+  if (duplicado) {
+    await interaction.reply({ content: `Passaporte **${id}** ja esta em uso por outro membro.`, ephemeral: true });
+    return;
+  }
+
+  db.prepare("UPDATE membros SET passaporte = ? WHERE discord_id = ?").run(id, usuario.id);
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x3498db)
+        .setTitle("Passaporte Atualizado")
+        .addFields(
+          { name: "Membro", value: membro.nome, inline: true },
+          { name: "Passaporte", value: `${id}`, inline: true },
+        )
         .setTimestamp(),
     ],
   });
@@ -236,7 +311,7 @@ async function perfil(interaction: ChatInputCommandInteraction) {
 
   const membro = db
     .prepare("SELECT * FROM membros WHERE discord_id = ?")
-    .get(usuario.id) as { id: number; nome: string; cargo: string; criado_em: string } | undefined;
+    .get(usuario.id) as { id: number; nome: string; cargo: string; passaporte: string | null; criado_em: string } | undefined;
 
   if (!membro) {
     await interaction.reply({ content: `**${usuario.displayName}** nao esta cadastrado.`, ephemeral: true });
@@ -284,8 +359,8 @@ async function perfil(interaction: ChatInputCommandInteraction) {
     .setTitle(`Perfil — ${membro.nome}`)
     .addFields(
       { name: "Cargo", value: getCargoLabel(membro.cargo), inline: true },
+      { name: "Passaporte", value: membro.passaporte ?? "Nao definido", inline: true },
       { name: "Membro desde", value: membro.criado_em.split(" ")[0], inline: true },
-      { name: "\u200b", value: "\u200b", inline: true },
       { name: "━━━ Semana Atual ━━━", value: "\u200b" },
       { name: "🌾 Farm", value: `${farmSemana.cobres} cobres | ${farmSemana.entregas} entregas\nMeta: ${meta > 0 ? `${progresso}% (${farmSemana.cobres}/${meta})` : "Sem meta"}`, inline: true },
       { name: "🛒 Vendas", value: `${vendasSemana.produtos} produtos (${vendasSemana.qtd} vendas)`, inline: true },

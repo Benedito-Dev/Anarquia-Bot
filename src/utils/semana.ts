@@ -7,16 +7,26 @@ export function getSemanaAtual(): string {
   return `${year}-W${week.toString().padStart(2, "0")}`;
 }
 
-export function getMetaSemanal(cargo: string): number {
+export function getDiaAtual(): string {
+  const now = new Date();
+  return now.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+export function getMetaDiaria(cargo: string): number {
   const metas: Record<string, number> = {
-    iniciante: 150,
-    membro: 300,
-    "farmer veterano": 600,
-    gerente: 0,
+    iniciante: 200,
+    membro: 200,
+    "farmer veterano": 200,
+    gerente: 200,
     sublider: 0,
     lider: 0,
   };
-  return metas[cargo.toLowerCase()] ?? 150;
+  return metas[cargo.toLowerCase()] ?? 200;
+}
+
+/** @deprecated use getMetaDiaria */
+export function getMetaSemanal(cargo: string): number {
+  return getMetaDiaria(cargo);
 }
 
 export function getCargoLabel(cargo: string): string {

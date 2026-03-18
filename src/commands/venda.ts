@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AutocompleteInteraction,
   ButtonBuilder,
   ButtonStyle,
   ChatInputCommandInteraction,
@@ -7,7 +8,7 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import db from "../database/db";
-import { CARGOS_GERENCIA, getSemanaAtual } from "../utils/semana";
+import { CARGOS_ADMIN, CARGOS_GERENCIA, getSemanaAtual, registrarAuditoria } from "../utils/semana";
 
 const PERCENT_VENDEDOR = 0.50;
 
@@ -57,6 +58,17 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub.setName("historico").setDescription("Ultimas vendas"),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("cancelar")
+      .setDescription("Cancelar uma venda por engano (admin)")
+      .addIntegerOption((opt) =>
+        opt.setName("id").setDescription("ID da venda (ver em /venda historico)").setRequired(true).setMinValue(1),
+      )
+      .addStringOption((opt) =>
+        opt.setName("motivo").setDescription("Motivo do cancelamento").setRequired(true),
+      ),
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -65,6 +77,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await registrar(interaction);
   } else if (subcommand === "historico") {
     await historico(interaction);
+  } else if (subcommand === "cancelar") {
+    await cancelar(interaction);
   }
 }
 
@@ -187,12 +201,17 @@ async function historico(interaction: ChatInputCommandInteraction) {
     const offset = pag * HISTORICO_VENDAS_POR_PAGINA;
     const vendas = db
       .prepare(
-        `SELECT v.*, m.nome as vendedor_nome
+        `SELECT v.id, v.produto, v.quantidade_produtos, v.preco_unitario, v.com_parceria,
+          v.receita_total, v.valor_vendedor, v.valor_familia, v.criado_em,
+          m.nome as vendedor_nome,
+          CASE WHEN vc.id IS NOT NULL THEN 1 ELSE 0 END as cancelada
         FROM vendas v
         LEFT JOIN membros m ON m.discord_id = v.vendedor_discord_id
+        LEFT JOIN vendas_canceladas vc ON vc.venda_id = v.id
         ORDER BY v.id DESC LIMIT ? OFFSET ?`,
       )
       .all(HISTORICO_VENDAS_POR_PAGINA, offset) as Array<{
+      id: number;
       produto: string;
       quantidade_produtos: number;
       preco_unitario: number;
@@ -202,12 +221,14 @@ async function historico(interaction: ChatInputCommandInteraction) {
       valor_familia: number;
       vendedor_nome: string | null;
       criado_em: string;
+      cancelada: number;
     }>;
 
     let texto = "";
     for (const v of vendas) {
       const tipo = v.com_parceria ? "parceria" : "sem parceria";
-      texto += `🛒 **${v.quantidade_produtos}x ${v.produto}** (${tipo}) — $${v.receita_total.toLocaleString()} | ${v.vendedor_nome ?? "?"} (${v.criado_em})\n`;
+      const canceladaLabel = v.cancelada ? " ~~cancelada~~" : "";
+      texto += `\`#${v.id}\` 🛒 **${v.quantidade_produtos}x ${v.produto}** (${tipo}) — $${v.receita_total.toLocaleString()} | ${v.vendedor_nome ?? "?"}${canceladaLabel} (${v.criado_em})\n`;
     }
 
     return new EmbedBuilder()
@@ -255,4 +276,70 @@ async function historico(interaction: ChatInputCommandInteraction) {
   collector.on("end", async () => {
     await interaction.editReply({ components: [] });
   });
+}
+
+async function cancelar(interaction: ChatInputCommandInteraction) {
+  const admin = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ?")
+    .get(interaction.user.id) as { cargo: string; nome: string } | undefined;
+
+  if (!admin || !CARGOS_ADMIN.includes(admin.cargo.toLowerCase())) {
+    await interaction.reply({ content: "Apenas **Sublider ou Lider** pode cancelar vendas.", ephemeral: true });
+    return;
+  }
+
+  const vendaId = interaction.options.getInteger("id", true);
+  const motivo = interaction.options.getString("motivo", true);
+
+  const venda = db
+    .prepare("SELECT * FROM vendas WHERE id = ?")
+    .get(vendaId) as { id: number; vendedor_discord_id: string; produto: string; quantidade_produtos: number; valor_familia: number; fabricavel?: number } | undefined;
+
+  if (!venda) {
+    await interaction.reply({ content: `Venda **#${vendaId}** nao encontrada.`, ephemeral: true });
+    return;
+  }
+
+  const jaCancelada = db.prepare("SELECT id FROM vendas_canceladas WHERE venda_id = ?").get(vendaId);
+  if (jaCancelada) {
+    await interaction.reply({ content: `Venda **#${vendaId}** ja foi cancelada anteriormente.`, ephemeral: true });
+    return;
+  }
+
+  const produto = db.prepare("SELECT fabricavel FROM produtos WHERE nome = ?").get(venda.produto) as { fabricavel: number } | undefined;
+
+  db.transaction(() => {
+    // Reverter estoque se fabricavel
+    if (produto?.fabricavel) {
+      db.prepare("UPDATE estoque SET quantidade = quantidade + ? WHERE material = ?").run(venda.quantidade_produtos, venda.produto);
+      db.prepare("INSERT INTO estoque_log (material, quantidade, tipo, descricao, membro_discord_id) VALUES (?, ?, ?, ?, ?)").run(
+        venda.produto, venda.quantidade_produtos, "ajuste", `Cancelamento venda #${vendaId}: ${motivo}`, interaction.user.id,
+      );
+    }
+    // Reverter divida do vendedor
+    db.prepare("UPDATE dividas SET valor_devido = MAX(0, valor_devido - ?), atualizado_em = datetime('now') WHERE membro_discord_id = ?").run(
+      venda.valor_familia, venda.vendedor_discord_id,
+    );
+    db.prepare("INSERT INTO dividas_log (membro_discord_id, tipo, valor, descricao) VALUES (?, ?, ?, ?)").run(
+      venda.vendedor_discord_id, "cancelamento", venda.valor_familia, `Cancelamento venda #${vendaId}`,
+    );
+    db.prepare("INSERT INTO vendas_canceladas (venda_id, cancelado_por, motivo) VALUES (?, ?, ?)").run(vendaId, interaction.user.id, motivo);
+    db.prepare("INSERT INTO auditoria_log (acao, executado_por, alvo, detalhes) VALUES (?, ?, ?, ?)").run(
+      "venda_cancelada", interaction.user.id, `venda #${vendaId}`, motivo,
+    );
+  })();
+
+  const embed = new EmbedBuilder()
+    .setColor(0xe74c3c)
+    .setTitle(`Venda #${vendaId} Cancelada`)
+    .addFields(
+      { name: "Produto", value: venda.produto, inline: true },
+      { name: "Quantidade", value: `${venda.quantidade_produtos}`, inline: true },
+      { name: "Divida revertida", value: `$${venda.valor_familia.toLocaleString()}`, inline: true },
+      { name: "Motivo", value: motivo },
+    )
+    .setFooter({ text: `Cancelado por ${admin.nome}` })
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed] });
 }

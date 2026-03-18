@@ -71,6 +71,15 @@ client.once("ready", () => {
 client.on("interactionCreate", async (interaction) => {
   if (!botReady) return;
 
+  // Handler de autocomplete
+  if (interaction.isAutocomplete()) {
+    const command = commandMap.get(interaction.commandName) as any;
+    if (command?.autocomplete) {
+      try { await command.autocomplete(interaction); } catch { /* ignora */ }
+    }
+    return;
+  }
+
   // Handler do botao abrir_farm
   if (interaction.isButton() && interaction.customId === "abrir_farm") {
     await interaction.deferReply({ ephemeral: true });

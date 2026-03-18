@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AutocompleteInteraction,
   ButtonBuilder,
   ButtonStyle,
   ChatInputCommandInteraction,
@@ -7,7 +8,7 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import db from "../database/db";
-import { CARGOS_GERENCIA } from "../utils/semana";
+import { CARGOS_ADMIN, CARGOS_GERENCIA, registrarAuditoria } from "../utils/semana";
 
 const CHOICES_FABRICAVEIS = [
   { name: "C4", value: "c4" },
@@ -39,7 +40,31 @@ export const data = new SlashCommandBuilder()
         opt.setName("quantidade").setDescription("Quantidade a fabricar").setRequired(true).setMinValue(1),
       ),
   )
-  .addSubcommand((sub) => sub.setName("historico").setDescription("Ultimas movimentacoes do estoque"));
+  .addSubcommand((sub) => sub.setName("historico").setDescription("Ultimas movimentacoes do estoque"))
+  .addSubcommand((sub) =>
+    sub
+      .setName("ajuste")
+      .setDescription("Ajuste manual do estoque (admin)")
+      .addStringOption((opt) =>
+        opt.setName("material").setDescription("Material ou produto").setRequired(true).setAutocomplete(true),
+      )
+      .addIntegerOption((opt) =>
+        opt.setName("quantidade").setDescription("Quantidade (negativo para remover)").setRequired(true),
+      )
+      .addStringOption((opt) =>
+        opt.setName("motivo").setDescription("Motivo do ajuste").setRequired(true),
+      ),
+  );
+
+export async function autocomplete(interaction: AutocompleteInteraction) {
+  const focused = interaction.options.getFocused().toLowerCase();
+  const itens = db.prepare("SELECT material FROM estoque ORDER BY material").all() as Array<{ material: string }>;
+  const filtered = itens
+    .filter((i) => i.material.toLowerCase().includes(focused))
+    .slice(0, 25)
+    .map((i) => ({ name: i.material, value: i.material }));
+  await interaction.respond(filtered);
+}
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   const subcommand = interaction.options.getSubcommand();
@@ -49,6 +74,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await produzir(interaction);
   } else if (subcommand === "historico") {
     await historico(interaction);
+  } else if (subcommand === "ajuste") {
+    await ajuste(interaction);
   }
 }
 
@@ -148,6 +175,64 @@ async function produzir(interaction: ChatInputCommandInteraction) {
       { name: "Materiais usados", value: receitaTexto },
     )
     .setFooter({ text: `Fabricado por ${membro.nome}` })
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+async function ajuste(interaction: ChatInputCommandInteraction) {
+  const discordId = interaction.user.id;
+
+  const admin = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ?")
+    .get(discordId) as { cargo: string; nome: string } | undefined;
+
+  if (!admin || !CARGOS_ADMIN.includes(admin.cargo.toLowerCase())) {
+    await interaction.reply({ content: "Apenas **Sublider ou Lider** pode ajustar o estoque.", ephemeral: true });
+    return;
+  }
+
+  const material = interaction.options.getString("material", true);
+  const quantidade = interaction.options.getInteger("quantidade", true);
+  const motivo = interaction.options.getString("motivo", true);
+
+  const item = db.prepare("SELECT quantidade FROM estoque WHERE material = ?").get(material) as { quantidade: number } | undefined;
+
+  if (!item) {
+    await interaction.reply({ content: `Material **${material}** nao encontrado no estoque.`, ephemeral: true });
+    return;
+  }
+
+  const novaQtd = item.quantidade + quantidade;
+  if (novaQtd < 0) {
+    await interaction.reply({
+      content: `Quantidade insuficiente. Estoque atual: ${item.quantidade}, ajuste solicitado: ${quantidade}.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  db.transaction(() => {
+    db.prepare("UPDATE estoque SET quantidade = ? WHERE material = ?").run(novaQtd, material);
+    db.prepare("INSERT INTO estoque_log (material, quantidade, tipo, descricao, membro_discord_id) VALUES (?, ?, ?, ?, ?)").run(
+      material, quantidade, "ajuste", motivo, discordId,
+    );
+    db.prepare("INSERT INTO auditoria_log (acao, executado_por, alvo, detalhes) VALUES (?, ?, ?, ?)").run(
+      "estoque_ajuste", discordId, material, `${quantidade > 0 ? "+" : ""}${quantidade} — ${motivo}`,
+    );
+  })();
+
+  const sinal = quantidade > 0 ? "+" : "";
+  const embed = new EmbedBuilder()
+    .setColor(quantidade > 0 ? 0x2ecc71 : 0xe74c3c)
+    .setTitle("Estoque Ajustado")
+    .addFields(
+      { name: "Material", value: material, inline: true },
+      { name: "Ajuste", value: `${sinal}${quantidade}`, inline: true },
+      { name: "Novo total", value: `${novaQtd}`, inline: true },
+      { name: "Motivo", value: motivo },
+    )
+    .setFooter({ text: `Por ${admin.nome}` })
     .setTimestamp();
 
   await interaction.reply({ embeds: [embed] });

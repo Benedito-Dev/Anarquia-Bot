@@ -62,3 +62,10 @@ export const CARGOS_VALIDOS = [
 
 export const CARGOS_GERENCIA = ["gerente", "sublider", "lider"];
 export const CARGOS_ADMIN = ["sublider", "lider"];
+
+export function registrarAuditoria(acao: string, executadoPor: string, alvo?: string, detalhes?: string): void {
+  // importado dinamicamente para evitar dependencia circular
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const db = require("../database/db").default;
+  db.prepare("INSERT INTO auditoria_log (acao, executado_por, alvo, detalhes) VALUES (?, ?, ?, ?)").run(acao, executadoPor, alvo ?? null, detalhes ?? null);
+}

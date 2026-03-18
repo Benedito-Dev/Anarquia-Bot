@@ -4,7 +4,7 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import db from "../database/db";
-import { CARGOS_VALIDOS, CARGOS_ADMIN, getCargoLabel, getMetaSemanal, getSemanaAtual } from "../utils/semana";
+import { CARGOS_VALIDOS, CARGOS_ADMIN, getCargoLabel, getMetaSemanal, getSemanaAtual, registrarAuditoria } from "../utils/semana";
 
 export const data = new SlashCommandBuilder()
   .setName("membro")
@@ -88,6 +88,14 @@ export const data = new SlashCommandBuilder()
       .addUserOption((opt) =>
         opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
       ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("historico")
+      .setDescription("Ver advertencias, promocoes e acoes de um membro (admin)")
+      .addUserOption((opt) =>
+        opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
+      ),
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -124,6 +132,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await definirPassaporte(interaction);
   } else if (subcommand === "perfil") {
     await perfil(interaction);
+  } else if (subcommand === "historico") {
+    await historico(interaction);
   }
 }
 
@@ -150,11 +160,9 @@ async function cadastrar(interaction: ChatInputCommandInteraction) {
   }
 
   db.prepare("INSERT INTO membros (discord_id, nome, passaporte, cargo) VALUES (?, ?, ?, ?)").run(
-    usuario.id,
-    usuario.displayName,
-    passaporte,
-    cargo,
+    usuario.id, usuario.displayName, passaporte, cargo,
   );
+  registrarAuditoria("membro_cadastrado", interaction.user.id, usuario.id, `${usuario.displayName} — cargo: ${cargo} — passaporte: ${passaporte}`);
 
   const meta = getMetaSemanal(cargo);
 
@@ -187,6 +195,7 @@ async function promover(interaction: ChatInputCommandInteraction) {
 
   const cargoAnterior = membro.cargo;
   db.prepare("UPDATE membros SET cargo = ?, nome = ? WHERE discord_id = ?").run(novoCargo, usuario.displayName, usuario.id);
+  registrarAuditoria("membro_promovido", interaction.user.id, usuario.id, `${usuario.displayName}: ${cargoAnterior} → ${novoCargo}`);
 
   const embed = new EmbedBuilder()
     .setColor(0xf1c40f)
@@ -246,6 +255,7 @@ async function remover(interaction: ChatInputCommandInteraction) {
   }
 
   db.prepare("UPDATE membros SET ativo = 0 WHERE discord_id = ?").run(usuario.id);
+  registrarAuditoria("membro_removido", interaction.user.id, usuario.id, membro.nome);
 
   // Tentar dar kick no Discord
   let kickStatus = "";
@@ -349,7 +359,6 @@ async function perfil(interaction: ChatInputCommandInteraction) {
   // Total geral da semana
   const totalSemana = ganhosFarm.total + vendasSemana.ganhos + bonusSemana.total + acoesSemana.total;
 
-  // Farm historico total
   const farmTotal = db
     .prepare("SELECT COALESCE(SUM(cobres), 0) as cobres, COUNT(*) as entregas FROM farm_entregas WHERE membro_id = ?")
     .get(membro.id) as { cobres: number; entregas: number };
@@ -371,6 +380,64 @@ async function perfil(interaction: ChatInputCommandInteraction) {
       { name: "📊 Total da semana", value: `**$${totalSemana.toLocaleString()}**`, inline: true },
       { name: "━━━ Historico Geral ━━━", value: "\u200b" },
       { name: "Total farmado", value: `${farmTotal.cobres} cobres | ${farmTotal.entregas} entregas`, inline: true },
+    )
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+async function historico(interaction: ChatInputCommandInteraction) {
+  const usuario = interaction.options.getUser("usuario", true);
+
+  const membro = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ?")
+    .get(usuario.id) as { id: number; nome: string; cargo: string; criado_em: string } | undefined;
+
+  if (!membro) {
+    await interaction.reply({ content: `**${usuario.displayName}** nao esta cadastrado.`, ephemeral: true });
+    return;
+  }
+
+  const advertencias = db
+    .prepare("SELECT motivo, dado_por, criado_em, ativa FROM advertencias WHERE membro_id = ? ORDER BY id DESC LIMIT 10")
+    .all(membro.id) as Array<{ motivo: string; dado_por: string; criado_em: string; ativa: number }>;
+
+  const auditoria = db
+    .prepare("SELECT acao, detalhes, criado_em FROM auditoria_log WHERE alvo = ? ORDER BY id DESC LIMIT 10")
+    .all(usuario.id) as Array<{ acao: string; detalhes: string | null; criado_em: string }>;
+
+  const acoes = db
+    .prepare("SELECT COUNT(*) as qtd, COALESCE(SUM(valor_recebido), 0) as total FROM acao_participantes WHERE discord_id = ?")
+    .get(usuario.id) as { qtd: number; total: number };
+
+  const farmTotal = db
+    .prepare("SELECT COALESCE(SUM(cobres), 0) as cobres, COUNT(*) as entregas FROM farm_entregas WHERE membro_id = ?")
+    .get(membro.id) as { cobres: number; entregas: number };
+
+  const vendasTotal = db
+    .prepare("SELECT COUNT(*) as qtd, COALESCE(SUM(quantidade_produtos), 0) as produtos FROM vendas WHERE vendedor_discord_id = ?")
+    .get(usuario.id) as { qtd: number; produtos: number };
+
+  const advTexto = advertencias.length > 0
+    ? advertencias.map((a) => `${a.ativa ? "⚠️" : "~~⚠️~~"} ${a.motivo} — <@${a.dado_por}> (${a.criado_em})`).join("\n")
+    : "Nenhuma advertencia.";
+
+  const audTexto = auditoria.length > 0
+    ? auditoria.map((a) => `\`${a.acao}\` — ${a.detalhes ?? ""} (${a.criado_em})`).join("\n")
+    : "Nenhuma acao administrativa.";
+
+  const embed = new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle(`Historico — ${membro.nome}`)
+    .addFields(
+      { name: "Cargo atual", value: getCargoLabel(membro.cargo), inline: true },
+      { name: "Membro desde", value: membro.criado_em.split(" ")[0], inline: true },
+      { name: "\u200b", value: "\u200b", inline: true },
+      { name: "🌾 Farm total", value: `${farmTotal.cobres} cobres | ${farmTotal.entregas} entregas`, inline: true },
+      { name: "🛒 Vendas total", value: `${vendasTotal.produtos} produtos (${vendasTotal.qtd} vendas)`, inline: true },
+      { name: "⚔️ Acoes total", value: `${acoes.qtd} acoes | $${acoes.total.toLocaleString()}`, inline: true },
+      { name: "⚠️ Advertencias (ultimas 10)", value: advTexto },
+      { name: "📋 Log administrativo (ultimas 10)", value: audTexto },
     )
     .setTimestamp();
 

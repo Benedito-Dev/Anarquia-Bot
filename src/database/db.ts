@@ -218,6 +218,30 @@ export function initDatabaseV2(): void {
       criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS auditoria_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      acao TEXT NOT NULL,
+      executado_por TEXT NOT NULL,
+      alvo TEXT,
+      detalhes TEXT,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS semanas_arquivadas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      semana TEXT NOT NULL,
+      dados_json TEXT NOT NULL,
+      arquivado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS vendas_canceladas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      venda_id INTEGER NOT NULL,
+      cancelado_por TEXT NOT NULL,
+      motivo TEXT,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS advertencias (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       membro_id INTEGER NOT NULL,

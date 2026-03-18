@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AutocompleteInteraction,
   ButtonBuilder,
   ButtonStyle,
   ChatInputCommandInteraction,
@@ -28,7 +29,7 @@ export const data = new SlashCommandBuilder()
       .setName("registrar")
       .setDescription("Registrar entrega de dinheiro sujo (gerencia+)")
       .addStringOption((opt) =>
-        opt.setName("passaporte").setDescription("Passaporte do membro que entregou").setRequired(true),
+        opt.setName("passaporte").setDescription("Nome do membro que entregou").setRequired(true).setAutocomplete(true),
       )
       .addIntegerOption((opt) =>
         opt.setName("valor").setDescription("Valor entregue em dinheiro sujo").setRequired(true).setMinValue(1),
@@ -43,6 +44,18 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub.setName("ganhos").setDescription("Ver seus ganhos de dinheiro sujo da semana"),
   );
+
+export async function autocomplete(interaction: AutocompleteInteraction) {
+  const focused = interaction.options.getFocused().toLowerCase();
+  const membros = db
+    .prepare("SELECT nome, passaporte FROM membros WHERE ativo = 1 ORDER BY nome")
+    .all() as Array<{ nome: string; passaporte: string }>;
+  const filtered = membros
+    .filter((m) => m.nome.toLowerCase().includes(focused))
+    .slice(0, 25)
+    .map((m) => ({ name: `${m.nome} [${m.passaporte}]`, value: String(m.passaporte) }));
+  await interaction.respond(filtered);
+}
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   const sub = interaction.options.getSubcommand();

@@ -35,17 +35,13 @@ export const data = new SlashCommandBuilder()
       .setName("depositar")
       .setDescription("Depositar no caixa (admin)")
       .addIntegerOption((opt) =>
-        opt
-          .setName("valor")
-          .setDescription("Valor a depositar")
-          .setRequired(true)
-          .setMinValue(1),
+        opt.setName("valor").setDescription("Valor a depositar").setRequired(true).setMinValue(1),
       )
       .addStringOption((opt) =>
-        opt
-          .setName("motivo")
-          .setDescription("Motivo do deposito")
-          .setRequired(true),
+        opt.setName("motivo").setDescription("Motivo do deposito").setRequired(true),
+      )
+      .addUserOption((opt) =>
+        opt.setName("membro").setDescription("Membro que esta depositando (para abater divida)").setRequired(false),
       ),
   )
   .addSubcommand((sub) =>
@@ -169,24 +165,46 @@ async function depositar(interaction: ChatInputCommandInteraction) {
 
   const valor = interaction.options.getInteger("valor", true);
   const motivo = interaction.options.getString("motivo", true);
+  const membroOpt = interaction.options.getUser("membro");
+  const depositanteId = membroOpt?.id ?? interaction.user.id;
 
   const caixa = db.prepare("SELECT saldo FROM caixa LIMIT 1").get() as { saldo: number };
+  const divida = db.prepare("SELECT valor_devido FROM dividas WHERE membro_discord_id = ?").get(depositanteId) as { valor_devido: number } | undefined;
+  const valorDevido = divida?.valor_devido ?? 0;
+  const abatimento = Math.min(valor, valorDevido);
+  const dividaRestante = valorDevido - abatimento;
 
   db.transaction(() => {
     db.prepare("UPDATE caixa SET saldo = saldo + ?").run(valor);
-    db.prepare(
-      "INSERT INTO caixa_log (tipo, valor, descricao, membro_discord_id) VALUES (?, ?, ?, ?)",
-    ).run("deposito", valor, motivo, interaction.user.id);
+    db.prepare("INSERT INTO caixa_log (tipo, valor, descricao, membro_discord_id) VALUES (?, ?, ?, ?)").run(
+      "deposito", valor, motivo, interaction.user.id,
+    );
+    if (abatimento > 0) {
+      db.prepare("UPDATE dividas SET valor_devido = ?, atualizado_em = datetime('now') WHERE membro_discord_id = ?").run(dividaRestante, depositanteId);
+      db.prepare("INSERT INTO dividas_log (membro_discord_id, tipo, valor, descricao) VALUES (?, ?, ?, ?)").run(
+        depositanteId, "pagamento", abatimento, `Deposito: ${motivo}`,
+      );
+    }
   })();
+
+  const fields: Array<{ name: string; value: string; inline: boolean }> = [
+    { name: "Valor depositado", value: `$${valor.toLocaleString()}`, inline: true },
+    { name: "Motivo", value: motivo, inline: true },
+    { name: "Novo saldo caixa", value: `$${(caixa.saldo + valor).toLocaleString()}`, inline: true },
+  ];
+
+  if (abatimento > 0) {
+    fields.push(
+      { name: "Divida abatida", value: `$${abatimento.toLocaleString()}`, inline: true },
+      { name: "Divida restante", value: `$${dividaRestante.toLocaleString()}`, inline: true },
+      { name: "\u200b", value: "\u200b", inline: true },
+    );
+  }
 
   const embed = new EmbedBuilder()
     .setColor(0x2ecc71)
     .setTitle("Deposito Realizado")
-    .addFields(
-      { name: "Valor", value: `$${valor.toLocaleString()}`, inline: true },
-      { name: "Motivo", value: motivo, inline: true },
-      { name: "Novo saldo", value: `$${(caixa.saldo + valor).toLocaleString()}`, inline: true },
-    )
+    .addFields(...fields)
     .setFooter({ text: `Por ${admin.nome}` })
     .setTimestamp();
 

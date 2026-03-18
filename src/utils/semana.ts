@@ -41,6 +41,16 @@ export function getCargoLabel(cargo: string): string {
   return labels[cargo.toLowerCase()] ?? cargo;
 }
 
+export function getMetaDinheiroDiaria(): number {
+  return 50000;
+}
+
+export const BONUS_DINHEIRO_TIERS = [
+  { valor: 500000, bonus: 50000, label: "500k na semana → +50k" },
+  { valor: 350000, bonus: 25000, label: "350k na semana → +25k" },
+  { valor: 200000, bonus: 10000, label: "200k na semana → +10k" },
+];
+
 export const CARGOS_VALIDOS = [
   "iniciante",
   "membro",

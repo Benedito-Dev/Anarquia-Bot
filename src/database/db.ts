@@ -74,6 +74,12 @@ export function initDatabase(): void {
   // Inicializar tabelas v2 (vendas, caixa, bonus)
   initDatabaseV2();
 
+  // Migration: adicionar coluna produto em producao_log se nao existir
+  const colunasProducaoLog = db.prepare("PRAGMA table_info(producao_log)").all() as Array<{ name: string }>;
+  if (!colunasProducaoLog.some((c) => c.name === "produto")) {
+    db.exec("ALTER TABLE producao_log ADD COLUMN produto TEXT NOT NULL DEFAULT 'c4'");
+  }
+
   // Migration: adicionar coluna passaporte se nao existir
   const colunas = db.prepare("PRAGMA table_info(membros)").all() as Array<{ name: string }>;
   if (!colunas.some((c) => c.name === "passaporte")) {
@@ -176,6 +182,40 @@ export function initDatabaseV2(): void {
       semana TEXT NOT NULL,
       criado_em TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (membro_id) REFERENCES membros(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS dinheiro_entregas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      membro_id INTEGER NOT NULL,
+      valor INTEGER NOT NULL,
+      semana TEXT NOT NULL,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (membro_id) REFERENCES membros(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS dinheiro_pagamentos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      membro_id INTEGER NOT NULL,
+      entrega_id INTEGER NOT NULL,
+      valor_pago INTEGER NOT NULL,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (membro_id) REFERENCES membros(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS dividas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      membro_discord_id TEXT NOT NULL,
+      valor_devido INTEGER NOT NULL DEFAULT 0,
+      atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dividas_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      membro_discord_id TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      valor INTEGER NOT NULL,
+      descricao TEXT,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS advertencias (

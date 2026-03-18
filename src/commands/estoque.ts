@@ -1,4 +1,7 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChatInputCommandInteraction,
   EmbedBuilder,
   SlashCommandBuilder,
@@ -150,28 +153,75 @@ async function produzir(interaction: ChatInputCommandInteraction) {
   await interaction.reply({ embeds: [embed] });
 }
 
-async function historico(interaction: ChatInputCommandInteraction) {
-  const logs = db
-    .prepare("SELECT material, quantidade, tipo, descricao, criado_em FROM estoque_log ORDER BY id DESC LIMIT 15")
-    .all() as Array<{ material: string; quantidade: number; tipo: string; descricao: string | null; criado_em: string }>;
+const HISTORICO_POR_PAGINA = 5;
 
-  if (logs.length === 0) {
+async function historico(interaction: ChatInputCommandInteraction) {
+  const total = (db.prepare("SELECT COUNT(*) as total FROM estoque_log").get() as { total: number }).total;
+
+  if (total === 0) {
     await interaction.reply({ content: "Nenhuma movimentacao registrada ainda.", ephemeral: true });
     return;
   }
 
-  let texto = "";
-  for (const log of logs) {
-    const sinal = log.quantidade > 0 ? "+" : "";
-    const emoji = log.tipo === "entrada" ? "📥" : log.tipo === "producao" ? "🔨" : "📤";
-    texto += `${emoji} **${log.material}** ${sinal}${log.quantidade} — ${log.descricao ?? log.tipo} (${log.criado_em})\n`;
-  }
+  const totalPaginas = Math.ceil(total / HISTORICO_POR_PAGINA);
+  let pagina = 0;
 
-  const embed = new EmbedBuilder()
-    .setColor(0x9b59b6)
-    .setTitle("Historico do Estoque (ultimos 15)")
-    .setDescription(texto)
-    .setTimestamp();
+  const buildEmbed = (pag: number) => {
+    const offset = pag * HISTORICO_POR_PAGINA;
+    const logs = db
+      .prepare("SELECT material, quantidade, tipo, descricao, criado_em FROM estoque_log ORDER BY id DESC LIMIT ? OFFSET ?")
+      .all(HISTORICO_POR_PAGINA, offset) as Array<{ material: string; quantidade: number; tipo: string; descricao: string | null; criado_em: string }>;
 
-  await interaction.reply({ embeds: [embed] });
+    let texto = "";
+    for (const log of logs) {
+      const sinal = log.quantidade > 0 ? "+" : "";
+      const emoji = log.tipo === "entrada" ? "📥" : log.tipo === "producao" ? "🔨" : "📤";
+      texto += `${emoji} **${log.material}** ${sinal}${log.quantidade} — ${log.descricao ?? log.tipo} (${log.criado_em})\n`;
+    }
+
+    return new EmbedBuilder()
+      .setColor(0x9b59b6)
+      .setTitle("Historico do Estoque")
+      .setDescription(texto)
+      .setFooter({ text: `Pagina ${pag + 1} de ${totalPaginas}` })
+      .setTimestamp();
+  };
+
+  const buildRow = (pag: number) =>
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("estoque_anterior")
+        .setLabel("◀ Anterior")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pag === 0),
+      new ButtonBuilder()
+        .setCustomId("estoque_proximo")
+        .setLabel("Próximo ▶")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pag >= totalPaginas - 1),
+    );
+
+  const reply = await interaction.reply({
+    embeds: [buildEmbed(pagina)],
+    components: totalPaginas > 1 ? [buildRow(pagina)] : [],
+    fetchReply: true,
+  });
+
+  if (totalPaginas <= 1) return;
+
+  const collector = reply.createMessageComponentCollector({ time: 60000 });
+
+  collector.on("collect", async (btn) => {
+    if (btn.user.id !== interaction.user.id) {
+      await btn.reply({ content: "Apenas quem usou o comando pode navegar.", ephemeral: true });
+      return;
+    }
+    if (btn.customId === "estoque_anterior") pagina = Math.max(0, pagina - 1);
+    else pagina = Math.min(totalPaginas - 1, pagina + 1);
+    await btn.update({ embeds: [buildEmbed(pagina)], components: [buildRow(pagina)] });
+  });
+
+  collector.on("end", async () => {
+    await interaction.editReply({ components: [] });
+  });
 }

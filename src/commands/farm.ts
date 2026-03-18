@@ -1,4 +1,7 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChatInputCommandInteraction,
   EmbedBuilder,
   SlashCommandBuilder,
@@ -238,6 +241,8 @@ async function metas(interaction: ChatInputCommandInteraction) {
   await interaction.reply({ embeds: [embed] });
 }
 
+const RANKING_POR_PAGINA = 5;
+
 async function ranking(interaction: ChatInputCommandInteraction) {
   const semana = getSemanaAtual();
 
@@ -251,8 +256,7 @@ async function ranking(interaction: ChatInputCommandInteraction) {
       LEFT JOIN farm_entregas f ON f.membro_id = m.id AND f.semana = ?
       WHERE m.ativo = 1
       GROUP BY m.id
-      ORDER BY total_cobres DESC
-      LIMIT 15`,
+      ORDER BY total_cobres DESC`,
     )
     .all(semana) as Array<{
     nome: string;
@@ -268,32 +272,75 @@ async function ranking(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const medalhas = ["🥇", "🥈", "🥉"];
-  let rankingText = "";
+  const totalPaginas = Math.ceil(rows.length / RANKING_POR_PAGINA);
+  let pagina = 0;
 
-  for (let index = 0; index < rows.length; index++) {
-    const row = rows[index];
-    const medal = medalhas[index] ?? `**${index + 1}.**`;
-    const meta = getMetaDiaria(row.cargo);
-    const cobresDia = db
-      .prepare("SELECT COALESCE(SUM(cobres), 0) as total FROM farm_entregas WHERE membro_id = ? AND DATE(criado_em) = date('now')")
-      .get(row.membro_id) as { total: number };
-    const status = meta > 0 && cobresDia.total >= meta ? " ✅" : "";
+  const buildRankingEmbed = (pag: number) => {
+    const medalhas = ["🥇", "🥈", "🥉"];
+    const inicio = pag * RANKING_POR_PAGINA;
+    const slice = rows.slice(inicio, inicio + RANKING_POR_PAGINA);
+    let rankingText = "";
 
-    const ganhos = db
-      .prepare("SELECT COALESCE(SUM(valor_pago), 0) as total FROM farmer_pagamentos fp JOIN farm_entregas fe ON fp.farm_entrega_id = fe.id WHERE fp.membro_id = ? AND fe.semana = ?")
-      .get(row.membro_id, semana) as { total: number };
+    for (let i = 0; i < slice.length; i++) {
+      const row = slice[i];
+      const index = inicio + i;
+      const medal = medalhas[index] ?? `**${index + 1}.**`;
+      const meta = getMetaDiaria(row.cargo);
+      const cobresDia = db
+        .prepare("SELECT COALESCE(SUM(cobres), 0) as total FROM farm_entregas WHERE membro_id = ? AND DATE(criado_em) = date('now')")
+        .get(row.membro_id) as { total: number };
+      const status = meta > 0 && cobresDia.total >= meta ? " ✅" : "";
+      const ganhos = db
+        .prepare("SELECT COALESCE(SUM(valor_pago), 0) as total FROM farmer_pagamentos fp JOIN farm_entregas fe ON fp.farm_entrega_id = fe.id WHERE fp.membro_id = ? AND fe.semana = ?")
+        .get(row.membro_id, semana) as { total: number };
+      rankingText += `${medal} **${row.nome}** (${getCargoLabel(row.cargo)}) — ${row.total_cobres} cobres | $${ganhos.total.toLocaleString()}${status}\n`;
+    }
 
-    rankingText += `${medal} **${row.nome}** (${getCargoLabel(row.cargo)}) — ${row.total_cobres} cobres | $${ganhos.total.toLocaleString()}${status}\n`;
-  }
+    return new EmbedBuilder()
+      .setColor(0xffd700)
+      .setTitle(`Ranking de Farm — Semana ${semana}`)
+      .setDescription(rankingText)
+      .setFooter({ text: `Pagina ${pag + 1} de ${totalPaginas}` })
+      .setTimestamp();
+  };
 
-  const embed = new EmbedBuilder()
-    .setColor(0xffd700)
-    .setTitle(`Ranking de Farm — Semana ${semana}`)
-    .setDescription(rankingText)
-    .setTimestamp();
+  const buildRow = (pag: number) =>
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("ranking_anterior")
+        .setLabel("◀ Anterior")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pag === 0),
+      new ButtonBuilder()
+        .setCustomId("ranking_proximo")
+        .setLabel("Próximo ▶")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pag >= totalPaginas - 1),
+    );
 
-  await interaction.reply({ embeds: [embed] });
+  const reply = await interaction.reply({
+    embeds: [buildRankingEmbed(pagina)],
+    components: totalPaginas > 1 ? [buildRow(pagina)] : [],
+    fetchReply: true,
+  });
+
+  if (totalPaginas <= 1) return;
+
+  const collector = reply.createMessageComponentCollector({ time: 60000 });
+
+  collector.on("collect", async (btn) => {
+    if (btn.user.id !== interaction.user.id) {
+      await btn.reply({ content: "Apenas quem usou o comando pode navegar.", ephemeral: true });
+      return;
+    }
+    if (btn.customId === "ranking_anterior") pagina = Math.max(0, pagina - 1);
+    else pagina = Math.min(totalPaginas - 1, pagina + 1);
+    await btn.update({ embeds: [buildRankingEmbed(pagina)], components: [buildRow(pagina)] });
+  });
+
+  collector.on("end", async () => {
+    await interaction.editReply({ components: [] });
+  });
 }
 
 async function ganhos(interaction: ChatInputCommandInteraction) {

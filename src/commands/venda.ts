@@ -1,4 +1,7 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChatInputCommandInteraction,
   EmbedBuilder,
   SlashCommandBuilder,
@@ -117,9 +120,16 @@ async function registrar(interaction: ChatInputCommandInteraction) {
     db.prepare(
       "INSERT INTO vendas (vendedor_discord_id, produto, quantidade_produtos, preco_unitario, com_parceria, receita_total, valor_vendedor, valor_familia) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(discordId, nomeProduto, quantidade, precoUnitario, comParceria ? 1 : 0, receitaTotal, valorVendedor, valorFamilia);
-    db.prepare("UPDATE caixa SET saldo = saldo + ?").run(valorFamilia);
-    db.prepare("INSERT INTO caixa_log (tipo, valor, descricao, membro_discord_id) VALUES (?, ?, ?, ?)").run(
-      "venda", valorFamilia, `Venda de ${quantidade}x ${nomeProduto} por ${membro.nome}`, discordId,
+
+    // Registrar divida em vez de creditar caixa diretamente
+    const divida = db.prepare("SELECT id, valor_devido FROM dividas WHERE membro_discord_id = ?").get(discordId) as { id: number; valor_devido: number } | undefined;
+    if (divida) {
+      db.prepare("UPDATE dividas SET valor_devido = valor_devido + ?, atualizado_em = datetime('now') WHERE membro_discord_id = ?").run(valorFamilia, discordId);
+    } else {
+      db.prepare("INSERT INTO dividas (membro_discord_id, valor_devido) VALUES (?, ?)").run(discordId, valorFamilia);
+    }
+    db.prepare("INSERT INTO dividas_log (membro_discord_id, tipo, valor, descricao) VALUES (?, ?, ?, ?)").run(
+      discordId, "venda", valorFamilia, `Venda de ${quantidade}x ${nomeProduto}`,
     );
   })();
 
@@ -151,7 +161,7 @@ async function registrar(interaction: ChatInputCommandInteraction) {
       { name: "═══ Distribuicao ═══", value: "\u200b" },
       { name: "Receita total", value: `$${receitaTotal.toLocaleString()}`, inline: true },
       { name: "Vendedor (50%)", value: `$${valorVendedor.toLocaleString()}`, inline: true },
-      { name: "Caixa familia (50%)", value: `$${valorFamilia.toLocaleString()}`, inline: true },
+      { name: "A depositar no caixa (50%)", value: `$${valorFamilia.toLocaleString()}`, inline: true },
       { name: "Vendas na semana", value: `${totalVendasSemana.total} unidades`, inline: true },
     )
     .setFooter({ text: `Vendido por ${membro.nome}` })
@@ -160,42 +170,89 @@ async function registrar(interaction: ChatInputCommandInteraction) {
   await interaction.reply({ embeds: [embed] });
 }
 
-async function historico(interaction: ChatInputCommandInteraction) {
-  const vendas = db
-    .prepare(
-      `SELECT v.*, m.nome as vendedor_nome
-      FROM vendas v
-      LEFT JOIN membros m ON m.discord_id = v.vendedor_discord_id
-      ORDER BY v.id DESC LIMIT 10`,
-    )
-    .all() as Array<{
-    produto: string;
-    quantidade_produtos: number;
-    preco_unitario: number;
-    com_parceria: number;
-    receita_total: number;
-    valor_vendedor: number;
-    valor_familia: number;
-    vendedor_nome: string | null;
-    criado_em: string;
-  }>;
+const HISTORICO_VENDAS_POR_PAGINA = 5;
 
-  if (vendas.length === 0) {
+async function historico(interaction: ChatInputCommandInteraction) {
+  const total = (db.prepare("SELECT COUNT(*) as total FROM vendas").get() as { total: number }).total;
+
+  if (total === 0) {
     await interaction.reply({ content: "Nenhuma venda registrada ainda.", ephemeral: true });
     return;
   }
 
-  let texto = "";
-  for (const v of vendas) {
-    const tipo = v.com_parceria ? "parceria" : "sem parceria";
-    texto += `🛒 **${v.quantidade_produtos}x ${v.produto}** (${tipo}) — $${v.receita_total.toLocaleString()} | ${v.vendedor_nome ?? "?"} (${v.criado_em})\n`;
-  }
+  const totalPaginas = Math.ceil(total / HISTORICO_VENDAS_POR_PAGINA);
+  let pagina = 0;
 
-  const embed = new EmbedBuilder()
-    .setColor(0xe67e22)
-    .setTitle("Historico de Vendas (ultimas 10)")
-    .setDescription(texto)
-    .setTimestamp();
+  const buildEmbed = (pag: number) => {
+    const offset = pag * HISTORICO_VENDAS_POR_PAGINA;
+    const vendas = db
+      .prepare(
+        `SELECT v.*, m.nome as vendedor_nome
+        FROM vendas v
+        LEFT JOIN membros m ON m.discord_id = v.vendedor_discord_id
+        ORDER BY v.id DESC LIMIT ? OFFSET ?`,
+      )
+      .all(HISTORICO_VENDAS_POR_PAGINA, offset) as Array<{
+      produto: string;
+      quantidade_produtos: number;
+      preco_unitario: number;
+      com_parceria: number;
+      receita_total: number;
+      valor_vendedor: number;
+      valor_familia: number;
+      vendedor_nome: string | null;
+      criado_em: string;
+    }>;
 
-  await interaction.reply({ embeds: [embed] });
+    let texto = "";
+    for (const v of vendas) {
+      const tipo = v.com_parceria ? "parceria" : "sem parceria";
+      texto += `🛒 **${v.quantidade_produtos}x ${v.produto}** (${tipo}) — $${v.receita_total.toLocaleString()} | ${v.vendedor_nome ?? "?"} (${v.criado_em})\n`;
+    }
+
+    return new EmbedBuilder()
+      .setColor(0xe67e22)
+      .setTitle("Historico de Vendas")
+      .setDescription(texto)
+      .setFooter({ text: `Pagina ${pag + 1} de ${totalPaginas}` })
+      .setTimestamp();
+  };
+
+  const buildRow = (pag: number) =>
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("vendas_anterior")
+        .setLabel("◀ Anterior")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pag === 0),
+      new ButtonBuilder()
+        .setCustomId("vendas_proximo")
+        .setLabel("Próximo ▶")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pag >= totalPaginas - 1),
+    );
+
+  const reply = await interaction.reply({
+    embeds: [buildEmbed(pagina)],
+    components: totalPaginas > 1 ? [buildRow(pagina)] : [],
+    fetchReply: true,
+  });
+
+  if (totalPaginas <= 1) return;
+
+  const collector = reply.createMessageComponentCollector({ time: 60000 });
+
+  collector.on("collect", async (btn) => {
+    if (btn.user.id !== interaction.user.id) {
+      await btn.reply({ content: "Apenas quem usou o comando pode navegar.", ephemeral: true });
+      return;
+    }
+    if (btn.customId === "vendas_anterior") pagina = Math.max(0, pagina - 1);
+    else pagina = Math.min(totalPaginas - 1, pagina + 1);
+    await btn.update({ embeds: [buildEmbed(pagina)], components: [buildRow(pagina)] });
+  });
+
+  collector.on("end", async () => {
+    await interaction.editReply({ components: [] });
+  });
 }

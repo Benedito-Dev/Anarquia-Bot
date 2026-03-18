@@ -72,26 +72,77 @@ async function limparFarm(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  db.transaction(() => {
-    db.prepare("DELETE FROM farm_entregas").run();
-    db.prepare("DELETE FROM farmer_pagamentos").run();
-    db.prepare("DELETE FROM estoque_log").run();
-    db.prepare("DELETE FROM producao_log").run();
-    db.prepare("DELETE FROM vendas").run();
-    db.prepare("DELETE FROM caixa_log").run();
-    db.prepare("DELETE FROM bonus_log").run();
-    db.prepare("DELETE FROM acoes").run();
-    db.prepare("DELETE FROM acao_participantes").run();
-    db.prepare("UPDATE estoque SET quantidade = 0").run();
-    db.prepare("UPDATE caixa SET saldo = 0").run();
-  })();
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("confirmar_limpar_farm")
+      .setLabel("Confirmar Reset")
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId("cancelar_limpar_farm")
+      .setLabel("Cancelar")
+      .setStyle(ButtonStyle.Secondary),
+  );
 
   const embed = new EmbedBuilder()
-    .setColor(0x2ecc71)
-    .setTitle("✅ Dados Limpos")
-    .setDescription("Todos os dados de farm, vendas, estoque e caixa foram resetados.\nMembros e advertencias foram mantidos.")
-    .setFooter({ text: `Executado por ${admin.nome}` })
+    .setColor(0xe74c3c)
+    .setTitle("⚠️ Confirmacao Necessaria")
+    .setDescription("Isso vai apagar **todos** os dados de farm, vendas, estoque e caixa.\nMembros e advertencias serao mantidos.\n\nTem certeza?")
     .setTimestamp();
 
-  await interaction.reply({ embeds: [embed] });
+  const reply = await interaction.reply({ embeds: [embed], components: [row], fetchReply: true });
+
+  const collector = reply.createMessageComponentCollector({ time: 30000 });
+
+  collector.on("collect", async (btn) => {
+    if (btn.user.id !== interaction.user.id) {
+      await btn.reply({ content: "Apenas quem executou o comando pode confirmar.", ephemeral: true });
+      return;
+    }
+
+    if (btn.customId === "confirmar_limpar_farm") {
+      db.transaction(() => {
+        db.prepare("DELETE FROM farm_entregas").run();
+        db.prepare("DELETE FROM farmer_pagamentos").run();
+        db.prepare("DELETE FROM estoque_log").run();
+        db.prepare("DELETE FROM producao_log").run();
+        db.prepare("DELETE FROM vendas").run();
+        db.prepare("DELETE FROM caixa_log").run();
+        db.prepare("DELETE FROM bonus_log").run();
+        db.prepare("DELETE FROM acoes").run();
+        db.prepare("DELETE FROM acao_participantes").run();
+        db.prepare("UPDATE estoque SET quantidade = 0").run();
+        db.prepare("UPDATE caixa SET saldo = 0").run();
+      })();
+
+      await btn.update({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x2ecc71)
+            .setTitle("✅ Dados Limpos")
+            .setDescription("Todos os dados de farm, vendas, estoque e caixa foram resetados.\nMembros e advertencias foram mantidos.")
+            .setFooter({ text: `Executado por ${admin.nome}` })
+            .setTimestamp(),
+        ],
+        components: [],
+      });
+    } else {
+      await btn.update({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x95a5a6)
+            .setTitle("Operacao Cancelada")
+            .setDescription("Nenhum dado foi apagado.")
+            .setTimestamp(),
+        ],
+        components: [],
+      });
+    }
+    collector.stop();
+  });
+
+  collector.on("end", async (_, reason) => {
+    if (reason === "time") {
+      await interaction.editReply({ components: [] });
+    }
+  });
 }

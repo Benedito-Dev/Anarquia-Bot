@@ -11,6 +11,8 @@ import * as relatorioCommand from "./commands/relatorio";
 import * as acaoCommand from "./commands/acao";
 import * as advertenciaCommand from "./commands/advertencia";
 import * as setupCommand from "./commands/setup";
+import * as dinheiroCommand from "./commands/dinheiro";
+import * as dividaCommand from "./commands/divida";
 
 dotenv.config();
 
@@ -30,7 +32,7 @@ if (!GUILD_ID) {
 initDatabase();
 console.log("Banco de dados inicializado.");
 
-const commands = [farmCommand, estoqueCommand, membroCommand, vendaCommand, caixaCommand, relatorioCommand, acaoCommand, advertenciaCommand, setupCommand];
+const commands = [farmCommand, estoqueCommand, membroCommand, vendaCommand, caixaCommand, relatorioCommand, acaoCommand, advertenciaCommand, setupCommand, dinheiroCommand, dividaCommand];
 const commandMap = new Collection<string, { execute: (interaction: any) => Promise<void> }>();
 
 for (const cmd of commands) {

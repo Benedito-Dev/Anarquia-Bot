@@ -20,6 +20,11 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub
+      .setName("lavagem")
+      .setDescription("Posta a mensagem fixa de abertura de lavagem no canal atual (admin)"),
+  )
+  .addSubcommand((sub) =>
+    sub
       .setName("limpar_farm")
       .setDescription("Limpa todos os dados de farm/vendas/caixa mantendo apenas membros (admin)"),
   )
@@ -43,6 +48,29 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   if (subcommand === "limpar_farm") {
     await limparFarm(interaction);
+    return;
+  }
+
+  if (subcommand === "lavagem") {
+    const rowLavagem = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("abrir_lavagem")
+        .setLabel("💵 Abrir Lavagem")
+        .setStyle(ButtonStyle.Primary),
+    );
+
+    const embedLavagem = new EmbedBuilder()
+      .setColor(0x8e44ad)
+      .setTitle("💵 Canal de Lavagem")
+      .setDescription(
+        "Clique no botão abaixo para abrir seu canal privado de lavagem.\n\n" +
+        "Uma thread privada será criada entre você e a liderança.\n" +
+        "Use `/dinheiro registrar` dentro da thread para registrar suas entregas.",
+      )
+      .setFooter({ text: "Apenas membros cadastrados podem abrir uma thread." });
+
+    await interaction.reply({ content: "Mensagem de lavagem postada!", ephemeral: true });
+    await (interaction.channel as TextChannel).send({ embeds: [embedLavagem], components: [rowLavagem] });
     return;
   }
 

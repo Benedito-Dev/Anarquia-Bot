@@ -9,11 +9,12 @@ import {
 } from "discord.js";
 import db from "../database/db";
 import { getSemanaAtual, getDiaAtual, getMetaDiaria, getCargoLabel, CARGOS_GERENCIA } from "../utils/semana";
+import { membroTemFolga } from "./membro";
 
 const PRECO_SEM_PARCERIA = 8300;
 const PRECO_COM_PARCERIA = 6500;
 const PRECO_BASE_FARMER = Math.round((PRECO_SEM_PARCERIA + PRECO_COM_PARCERIA) / 2); // Media: 7.400
-const PERCENT_FARMER = 0.05;
+const PERCENT_FARMER = 0.25;
 const COBRES_POR_PRODUTO = 6;
 const ALUMINIOS_POR_PRODUTO = 6;
 
@@ -187,7 +188,7 @@ async function registrar(interaction: ChatInputCommandInteraction) {
       { name: "Registrado por", value: `<@${discordId}>`, inline: true },
       { name: "\u200b", value: "\u200b", inline: true },
       { name: "Materiais entregues", value: entregaTexto },
-      { name: "Pagamento (base C4)", value: `$${pagamentoFarmer.toLocaleString()}`, inline: true },
+      { name: "Pagamento (base C4, 25%)", value: `$${pagamentoFarmer.toLocaleString()}`, inline: true },
       { name: "Ganhos da semana", value: `$${ganhosSemana.total.toLocaleString()}`, inline: true },
       { name: `Meta diaria (${meta} cobres)`, value: `${barraProgresso} ${progresso}% — ${totalDia.total_cobres}/${meta}` },
     )
@@ -210,6 +211,19 @@ async function metas(interaction: ChatInputCommandInteraction) {
     await interaction.reply({
       content: "Voce nao esta cadastrado. Peca a um admin para te cadastrar.",
       ephemeral: true,
+    });
+    return;
+  }
+
+  if (membroTemFolga(membro.id, dia)) {
+    await interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x3498db)
+          .setTitle(`🏖️ Dia de Folga — ${membro.nome}`)
+          .setDescription("Voce esta de folga hoje! Nenhuma meta e exigida.\nBom descanso! 😄")
+          .setTimestamp(),
+      ],
     });
     return;
   }

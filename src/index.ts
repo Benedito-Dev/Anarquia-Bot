@@ -15,6 +15,7 @@ import * as dinheiroCommand from "./commands/dinheiro";
 import * as dividaCommand from "./commands/divida";
 import * as graficoCommand from "./commands/grafico";
 import * as guiaCommand from "./commands/guia";
+import * as parceriaCommand from "./commands/parceria";
 
 dotenv.config();
 
@@ -34,7 +35,7 @@ if (!GUILD_ID) {
 initDatabase();
 console.log("Banco de dados inicializado.");
 
-const commands = [farmCommand, estoqueCommand, membroCommand, vendaCommand, caixaCommand, relatorioCommand, acaoCommand, advertenciaCommand, setupCommand, dinheiroCommand, dividaCommand, graficoCommand, guiaCommand];
+const commands = [farmCommand, estoqueCommand, membroCommand, vendaCommand, caixaCommand, relatorioCommand, acaoCommand, advertenciaCommand, setupCommand, dinheiroCommand, dividaCommand, graficoCommand, guiaCommand, parceriaCommand];
 const commandMap = new Collection<string, { execute: (interaction: any) => Promise<void> }>();
 
 for (const cmd of commands) {
@@ -79,6 +80,59 @@ client.on("interactionCreate", async (interaction) => {
     if (command?.autocomplete) {
       try { await command.autocomplete(interaction); } catch { /* ignora */ }
     }
+    return;
+  }
+
+  // Handler do botao abrir_lavagem
+  if (interaction.isButton() && interaction.customId === "abrir_lavagem") {
+    await interaction.deferReply({ ephemeral: true });
+
+    const membro = db
+      .prepare("SELECT * FROM membros WHERE discord_id = ? AND ativo = 1")
+      .get(interaction.user.id) as { id: number; nome: string } | undefined;
+
+    if (!membro) {
+      await interaction.editReply({ content: "Voce nao esta cadastrado na familia. Peca a um admin para te cadastrar." });
+      return;
+    }
+
+    const channel = interaction.channel;
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      await interaction.editReply({ content: "Este botao so funciona em canais de texto." });
+      return;
+    }
+
+    const threadExistente = channel.threads.cache.find(
+      (t) => t.name === `lavagem-${membro.nome}` && !t.archived,
+    );
+
+    if (threadExistente) {
+      await interaction.editReply({ content: `Voce ja tem uma thread ativa: ${threadExistente}` });
+      return;
+    }
+
+    const thread = await channel.threads.create({
+      name: `lavagem-${membro.nome}`,
+      autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
+      type: ChannelType.PrivateThread,
+      reason: `Lavagem de ${membro.nome}`,
+    });
+
+    await thread.members.add(interaction.user.id);
+
+    const lideranca = db
+      .prepare("SELECT discord_id FROM membros WHERE ativo = 1 AND (cargo = 'lider' OR cargo = 'sublider')")
+      .all() as Array<{ discord_id: string }>;
+
+    for (const l of lideranca) {
+      await thread.members.add(l.discord_id);
+    }
+
+    await thread.send({
+      content: `Ola <@${interaction.user.id}>! Esta e sua thread privada de lavagem.\nUse \`/dinheiro registrar\` para registrar suas entregas.\nA lideranca foi adicionada automaticamente.`,
+    });
+
+    await interaction.editReply({ content: `Sua thread foi criada: ${thread}` });
     return;
   }
 
@@ -140,6 +194,12 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (!interaction.isChatInputCommand()) return;
+
+  // Sincronizar nome do membro se mudou
+  const membroAtual = db.prepare("SELECT nome FROM membros WHERE discord_id = ? AND ativo = 1").get(interaction.user.id) as { nome: string } | undefined;
+  if (membroAtual && membroAtual.nome !== interaction.user.displayName) {
+    db.prepare("UPDATE membros SET nome = ? WHERE discord_id = ?").run(interaction.user.displayName, interaction.user.id);
+  }
 
   const command = commandMap.get(interaction.commandName);
   if (!command) return;

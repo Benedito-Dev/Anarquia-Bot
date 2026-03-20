@@ -17,6 +17,7 @@ export function initDatabase(): void {
       cargo TEXT NOT NULL DEFAULT 'iniciante',
       setor TEXT NOT NULL DEFAULT 'producao',
       ativo INTEGER NOT NULL DEFAULT 1,
+      folga_dia TEXT,
       criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -84,6 +85,9 @@ export function initDatabase(): void {
   const colunas = db.prepare("PRAGMA table_info(membros)").all() as Array<{ name: string }>;
   if (!colunas.some((c) => c.name === "passaporte")) {
     db.exec("ALTER TABLE membros ADD COLUMN passaporte INTEGER");
+  }
+  if (!colunas.some((c) => c.name === "folga_dia")) {
+    db.exec("ALTER TABLE membros ADD COLUMN folga_dia TEXT");
   }
 
   // Migration: adicionar coluna produto em vendas se nao existir
@@ -224,6 +228,17 @@ export function initDatabaseV2(): void {
       executado_por TEXT NOT NULL,
       alvo TEXT,
       detalhes TEXT,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS parcerias (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nome TEXT NOT NULL,
+      tipo TEXT NOT NULL DEFAULT 'mutuo',
+      desconto_percent INTEGER NOT NULL DEFAULT 0,
+      contato_discord_id TEXT,
+      observacoes TEXT,
+      ativo INTEGER NOT NULL DEFAULT 1,
       criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 

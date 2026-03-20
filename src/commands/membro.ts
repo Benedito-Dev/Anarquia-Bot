@@ -96,6 +96,20 @@ export const data = new SlashCommandBuilder()
       .addUserOption((opt) =>
         opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
       ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("folga")
+      .setDescription("Conceder ou remover folga de um membro (admin)")
+      .addUserOption((opt) =>
+        opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("data")
+          .setDescription("Data da folga (YYYY-MM-DD). Deixe vazio para remover folga atual.")
+          .setRequired(false),
+      ),
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -134,6 +148,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await perfil(interaction);
   } else if (subcommand === "historico") {
     await historico(interaction);
+  } else if (subcommand === "folga") {
+    await folga(interaction);
   }
 }
 
@@ -147,23 +163,33 @@ async function cadastrar(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const existente = db.prepare("SELECT * FROM membros WHERE discord_id = ?").get(usuario.id);
+  const existente = db.prepare("SELECT * FROM membros WHERE discord_id = ?").get(usuario.id) as { ativo: number } | undefined;
   if (existente) {
-    await interaction.reply({ content: `**${usuario.displayName}** ja esta cadastrado.`, ephemeral: true });
-    return;
+    if (existente.ativo === 1) {
+      await interaction.reply({ content: `**${usuario.displayName}** ja esta cadastrado.`, ephemeral: true });
+      return;
+    }
+    // Membro inativo — reativar
+    const passaporteExistente = db.prepare("SELECT * FROM membros WHERE passaporte = ? AND discord_id != ?").get(passaporte, usuario.id);
+    if (passaporteExistente) {
+      await interaction.reply({ content: `Passaporte **${passaporte}** ja esta em uso.`, ephemeral: true });
+      return;
+    }
+    db.prepare("UPDATE membros SET ativo = 1, nome = ?, passaporte = ?, cargo = ? WHERE discord_id = ?").run(
+      usuario.displayName, passaporte, cargo, usuario.id,
+    );
+    registrarAuditoria("membro_reativado", interaction.user.id, usuario.id, `${usuario.displayName} — cargo: ${cargo} — passaporte: ${passaporte}`);
+  } else {
+    const passaporteExistente = db.prepare("SELECT * FROM membros WHERE passaporte = ?").get(passaporte);
+    if (passaporteExistente) {
+      await interaction.reply({ content: `Passaporte **${passaporte}** ja esta em uso.`, ephemeral: true });
+      return;
+    }
+    db.prepare("INSERT INTO membros (discord_id, nome, passaporte, cargo) VALUES (?, ?, ?, ?)").run(
+      usuario.id, usuario.displayName, passaporte, cargo,
+    );
+    registrarAuditoria("membro_cadastrado", interaction.user.id, usuario.id, `${usuario.displayName} — cargo: ${cargo} — passaporte: ${passaporte}`);
   }
-
-  const passaporteExistente = db.prepare("SELECT * FROM membros WHERE passaporte = ?").get(passaporte);
-  if (passaporteExistente) {
-    await interaction.reply({ content: `Passaporte **${passaporte}** ja esta em uso.`, ephemeral: true });
-    return;
-  }
-
-  db.prepare("INSERT INTO membros (discord_id, nome, passaporte, cargo) VALUES (?, ?, ?, ?)").run(
-    usuario.id, usuario.displayName, passaporte, cargo,
-  );
-  registrarAuditoria("membro_cadastrado", interaction.user.id, usuario.id, `${usuario.displayName} — cargo: ${cargo} — passaporte: ${passaporte}`);
-
   const meta = getMetaSemanal(cargo);
 
   const embed = new EmbedBuilder()
@@ -381,6 +407,67 @@ async function perfil(interaction: ChatInputCommandInteraction) {
       { name: "━━━ Historico Geral ━━━", value: "\u200b" },
       { name: "Total farmado", value: `${farmTotal.cobres} cobres | ${farmTotal.entregas} entregas`, inline: true },
     )
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+export function membroTemFolga(membroId: number, dia: string): boolean {
+  const membro = db
+    .prepare("SELECT folga_dia FROM membros WHERE id = ?")
+    .get(membroId) as { folga_dia: string | null } | undefined;
+  return membro?.folga_dia === dia;
+}
+
+async function folga(interaction: ChatInputCommandInteraction) {
+  const usuario = interaction.options.getUser("usuario", true);
+  const dataOpt = interaction.options.getString("data");
+
+  const membro = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ? AND ativo = 1")
+    .get(usuario.id) as { id: number; nome: string; folga_dia: string | null } | undefined;
+
+  if (!membro) {
+    await interaction.reply({ content: `**${usuario.displayName}** nao esta cadastrado ou esta inativo.`, ephemeral: true });
+    return;
+  }
+
+  // Sem data = remover folga
+  if (!dataOpt) {
+    if (!membro.folga_dia) {
+      await interaction.reply({ content: `**${membro.nome}** nao possui folga agendada.`, ephemeral: true });
+      return;
+    }
+    db.prepare("UPDATE membros SET folga_dia = NULL WHERE id = ?").run(membro.id);
+    await interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x95a5a6)
+          .setTitle("Folga Removida")
+          .setDescription(`A folga de **${membro.nome}** foi removida.`)
+          .setTimestamp(),
+      ],
+    });
+    return;
+  }
+
+  // Validar formato da data
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dataOpt)) {
+    await interaction.reply({ content: "Formato de data invalido. Use **YYYY-MM-DD** (ex: 2025-07-20).", ephemeral: true });
+    return;
+  }
+
+  db.prepare("UPDATE membros SET folga_dia = ? WHERE id = ?").run(dataOpt, membro.id);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x2ecc71)
+    .setTitle("🏖️ Folga Concedida")
+    .addFields(
+      { name: "Membro", value: membro.nome, inline: true },
+      { name: "Data da folga", value: dataOpt, inline: true },
+    )
+    .setDescription("As metas desse dia serao desaplicadas automaticamente.")
+    .setFooter({ text: `Concedida por ${interaction.user.displayName}` })
     .setTimestamp();
 
   await interaction.reply({ embeds: [embed] });

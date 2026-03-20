@@ -16,8 +16,9 @@ import {
   CARGOS_GERENCIA,
   BONUS_DINHEIRO_TIERS,
 } from "../utils/semana";
+import { membroTemFolga } from "./membro";
 
-const PERCENT_MEMBRO = 0.10;
+const PERCENT_MEMBRO = 0.60;
 const RANKING_POR_PAGINA = 5;
 const META_CARGOS = ["iniciante", "membro", "farmer veterano", "gerente"];
 
@@ -145,7 +146,7 @@ async function registrar(interaction: ChatInputCommandInteraction) {
       { name: "Registrado por", value: `<@${discordId}>`, inline: true },
       { name: "\u200b", value: "\u200b", inline: true },
       { name: "Valor entregue", value: `$${valor.toLocaleString()}`, inline: true },
-      { name: "Pagamento (10%)", value: `$${valorPago.toLocaleString()}`, inline: true },
+      { name: "Pagamento (60%)", value: `$${valorPago.toLocaleString()}`, inline: true },
       { name: "Ganhos da semana", value: `$${ganhosSemana.total.toLocaleString()}`, inline: true },
       { name: `Meta diaria ($${meta.toLocaleString()})`, value: `${barra} ${progresso}% — $${totalDia.total.toLocaleString()}/$${meta.toLocaleString()}` },
     )
@@ -166,6 +167,19 @@ async function metas(interaction: ChatInputCommandInteraction) {
 
   if (!membro) {
     await interaction.reply({ content: "Voce nao esta cadastrado. Peca a um admin para te cadastrar.", ephemeral: true });
+    return;
+  }
+
+  if (membroTemFolga(membro.id, dia)) {
+    await interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x3498db)
+          .setTitle(`🏖️ Dia de Folga — ${membro.nome}`)
+          .setDescription("Voce esta de folga hoje! Nenhuma meta e exigida.\nBom descanso! 😄")
+          .setTimestamp(),
+      ],
+    });
     return;
   }
 
@@ -202,7 +216,7 @@ async function metas(interaction: ChatInputCommandInteraction) {
       { name: "\u200b", value: "\u200b", inline: true },
       { name: "Progresso diario", value: `${barra} ${progresso}%` },
       { name: "Total na semana", value: `$${totalSemana.total.toLocaleString()}`, inline: true },
-      { name: "Ganhos (10%)", value: `$${ganhosSemana.total.toLocaleString()}`, inline: true },
+      { name: "Ganhos (60%)", value: `$${ganhosSemana.total.toLocaleString()}`, inline: true },
       { name: "Bonus", value: `$${bonusSemana.total.toLocaleString()}`, inline: true },
     )
     .setTimestamp();

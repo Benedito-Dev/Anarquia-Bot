@@ -10,7 +10,7 @@ import {
 import db from "../database/db";
 import { CARGOS_ADMIN, CARGOS_GERENCIA, getSemanaAtual, registrarAuditoria } from "../utils/semana";
 
-const PERCENT_VENDEDOR = 0.50;
+const PERCENT_VENDEDOR = 0.45;
 
 const BONUS_VENDAS_TIERS = [
   { produtos: 350, bonus: 100000, label: "350 produtos → +100k" },
@@ -123,7 +123,7 @@ async function registrar(interaction: ChatInputCommandInteraction) {
   const precoUnitario = comParceria ? produto.preco_com_parceria : produto.preco_sem_parceria;
   const receitaTotal = quantidade * precoUnitario;
   const valorVendedor = Math.round(receitaTotal * PERCENT_VENDEDOR);
-  const valorFamilia = receitaTotal - valorVendedor;
+  const valorFamilia = Math.round(receitaTotal * 0.30);
   const semana = getSemanaAtual();
 
   db.transaction(() => {
@@ -174,8 +174,8 @@ async function registrar(interaction: ChatInputCommandInteraction) {
       { name: "Tipo", value: comParceria ? "Com parceria" : "Sem parceria", inline: true },
       { name: "═══ Distribuicao ═══", value: "\u200b" },
       { name: "Receita total", value: `$${receitaTotal.toLocaleString()}`, inline: true },
-      { name: "Vendedor (50%)", value: `$${valorVendedor.toLocaleString()}`, inline: true },
-      { name: "A depositar no caixa (50%)", value: `$${valorFamilia.toLocaleString()}`, inline: true },
+      { name: "Vendedor (45%)", value: `$${valorVendedor.toLocaleString()}`, inline: true },
+      { name: "A depositar no caixa (30%)", value: `$${valorFamilia.toLocaleString()}`, inline: true },
       { name: "Vendas na semana", value: `${totalVendasSemana.total} unidades`, inline: true },
     )
     .setFooter({ text: `Vendido por ${membro.nome}` })

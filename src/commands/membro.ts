@@ -99,6 +99,27 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub
+      .setName("rebaixar")
+      .setDescription("Rebaixar membro (admin)")
+      .addUserOption((opt) =>
+        opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("cargo")
+          .setDescription("Novo cargo (inferior ao atual)")
+          .setRequired(true)
+          .addChoices(
+            { name: "Iniciante", value: "iniciante" },
+            { name: "Membro", value: "membro" },
+            { name: "Farmer Veterano", value: "farmer veterano" },
+            { name: "Gerente", value: "gerente" },
+            { name: "Sublider", value: "sublider" },
+          ),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
       .setName("folga")
       .setDescription("Conceder ou remover folga de um membro (admin)")
       .addUserOption((opt) =>
@@ -150,6 +171,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await historico(interaction);
   } else if (subcommand === "folga") {
     await folga(interaction);
+  } else if (subcommand === "rebaixar") {
+    await rebaixar(interaction);
   }
 }
 
@@ -410,6 +433,48 @@ async function perfil(interaction: ChatInputCommandInteraction) {
     .setTimestamp();
 
   await interaction.reply({ embeds: [embed] });
+}
+
+async function rebaixar(interaction: ChatInputCommandInteraction) {
+  const usuario = interaction.options.getUser("usuario", true);
+  const novoCargo = interaction.options.getString("cargo", true);
+
+  const membro = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ? AND ativo = 1")
+    .get(usuario.id) as { id: number; cargo: string; nome: string } | undefined;
+
+  if (!membro) {
+    await interaction.reply({ content: `**${usuario.displayName}** nao esta cadastrado.`, ephemeral: true });
+    return;
+  }
+
+  const ordem = ["iniciante", "membro", "farmer veterano", "gerente", "sublider", "lider"];
+  const indexAtual = ordem.indexOf(membro.cargo.toLowerCase());
+  const indexNovo = ordem.indexOf(novoCargo);
+
+  if (indexNovo >= indexAtual) {
+    await interaction.reply({ content: `O cargo **${novoCargo}** nao e inferior ao cargo atual (**${membro.cargo}**). Use /membro promover.`, ephemeral: true });
+    return;
+  }
+
+  const cargoAnterior = membro.cargo;
+  db.prepare("UPDATE membros SET cargo = ?, nome = ? WHERE discord_id = ?").run(novoCargo, usuario.displayName, usuario.id);
+  registrarAuditoria("membro_rebaixado", interaction.user.id, usuario.id, `${usuario.displayName}: ${cargoAnterior} → ${novoCargo}`);
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xe74c3c)
+        .setTitle("Membro Rebaixado")
+        .addFields(
+          { name: "Nome", value: usuario.displayName, inline: true },
+          { name: "Cargo anterior", value: getCargoLabel(cargoAnterior), inline: true },
+          { name: "Novo cargo", value: getCargoLabel(novoCargo), inline: true },
+        )
+        .setFooter({ text: `Rebaixado por ${interaction.user.displayName}` })
+        .setTimestamp(),
+    ],
+  });
 }
 
 export function membroTemFolga(membroId: number, dia: string): boolean {

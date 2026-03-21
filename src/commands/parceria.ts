@@ -17,10 +17,27 @@ type Parceria = {
   criado_em: string;
 };
 
+type ParceriaProduto = {
+  id: number;
+  parceria_id: number;
+  nome: string;
+  categoria: string;
+  preco: number | null;
+};
+
 const TIPO_LABEL: Record<string, string> = {
   comprador: "🛒 Comprador",
   fornecedor: "📦 Fornecedor",
   mutuo: "🤝 Mútuo",
+};
+
+const CATEGORIA_LABEL: Record<string, string> = {
+  baseado: "🔫 Baseado",
+  lockpick: "🔑 Lockpick",
+  drogas: "💊 Drogas",
+  veiculo: "🚗 Veículo",
+  arma: "🔧 Arma",
+  outro: "📦 Outro",
 };
 
 export const data = new SlashCommandBuilder()
@@ -103,6 +120,42 @@ export const data = new SlashCommandBuilder()
       .addIntegerOption((opt) =>
         opt.setName("id").setDescription("ID da parceria").setRequired(true).setMinValue(1),
       ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("produto_adicionar")
+      .setDescription("Adicionar produto a uma parceria (admin)")
+      .addIntegerOption((opt) =>
+        opt.setName("parceria_id").setDescription("ID da parceria").setRequired(true).setMinValue(1),
+      )
+      .addStringOption((opt) =>
+        opt.setName("nome").setDescription("Nome do produto").setRequired(true),
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("categoria")
+          .setDescription("Categoria do produto")
+          .setRequired(true)
+          .addChoices(
+            { name: "🔫 Baseado", value: "baseado" },
+            { name: "🔑 Lockpick", value: "lockpick" },
+            { name: "💊 Drogas", value: "drogas" },
+            { name: "🚗 Veículo", value: "veiculo" },
+            { name: "🔧 Arma", value: "arma" },
+            { name: "📦 Outro", value: "outro" },
+          ),
+      )
+      .addIntegerOption((opt) =>
+        opt.setName("preco").setDescription("Preço do produto (opcional)").setRequired(false).setMinValue(1),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("produto_remover")
+      .setDescription("Remover produto de uma parceria (admin)")
+      .addIntegerOption((opt) =>
+        opt.setName("produto_id").setDescription("ID do produto (ver em /parceria ver)").setRequired(true).setMinValue(1),
+      ),
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -115,7 +168,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const isAdmin = membro && CARGOS_ADMIN.includes(membro.cargo.toLowerCase());
   const isGerencia = membro && CARGOS_GERENCIA.includes(membro.cargo.toLowerCase());
 
-  if (["adicionar", "remover", "editar"].includes(sub) && !isAdmin) {
+  if (["adicionar", "remover", "editar", "produto_adicionar", "produto_remover"].includes(sub) && !isAdmin) {
     await interaction.reply({ content: "Apenas **Sublider ou Lider** pode gerenciar parcerias.", ephemeral: true });
     return;
   }
@@ -130,6 +183,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   else if (sub === "editar") await editar(interaction);
   else if (sub === "listar") await listar(interaction);
   else if (sub === "ver") await ver(interaction);
+  else if (sub === "produto_adicionar") await produtoAdicionar(interaction);
+  else if (sub === "produto_remover") await produtoRemover(interaction);
 }
 
 async function adicionar(interaction: ChatInputCommandInteraction) {
@@ -178,14 +233,16 @@ async function remover(interaction: ChatInputCommandInteraction) {
 
   db.prepare("UPDATE parcerias SET ativo = 0 WHERE id = ?").run(id);
 
-  const embed = new EmbedBuilder()
-    .setColor(0xe74c3c)
-    .setTitle("Parceria Removida")
-    .setDescription(`A parceria com **${parceria.nome}** foi desativada.`)
-    .setFooter({ text: `Removido por ${interaction.user.displayName}` })
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xe74c3c)
+        .setTitle("Parceria Removida")
+        .setDescription(`A parceria com **${parceria.nome}** foi desativada.`)
+        .setFooter({ text: `Removido por ${interaction.user.displayName}` })
+        .setTimestamp(),
+    ],
+  });
 }
 
 async function editar(interaction: ChatInputCommandInteraction) {
@@ -209,21 +266,23 @@ async function editar(interaction: ChatInputCommandInteraction) {
     "UPDATE parcerias SET nome = ?, tipo = ?, desconto_percent = ?, contato_discord_id = ?, observacoes = ? WHERE id = ?",
   ).run(nome, tipo, desconto, contatoId, observacoes, id);
 
-  const embed = new EmbedBuilder()
-    .setColor(0xf1c40f)
-    .setTitle("Parceria Editada")
-    .addFields(
-      { name: "ID", value: `#${id}`, inline: true },
-      { name: "Nome", value: nome, inline: true },
-      { name: "Tipo", value: TIPO_LABEL[tipo] ?? tipo, inline: true },
-      { name: "Desconto", value: `${desconto}%`, inline: true },
-      { name: "Contato", value: contatoId ? `<@${contatoId}>` : "Não informado", inline: true },
-      { name: "Observações", value: observacoes ?? "Nenhuma", inline: false },
-    )
-    .setFooter({ text: `Editado por ${interaction.user.displayName}` })
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xf1c40f)
+        .setTitle("Parceria Editada")
+        .addFields(
+          { name: "ID", value: `#${id}`, inline: true },
+          { name: "Nome", value: nome, inline: true },
+          { name: "Tipo", value: TIPO_LABEL[tipo] ?? tipo, inline: true },
+          { name: "Desconto", value: `${desconto}%`, inline: true },
+          { name: "Contato", value: contatoId ? `<@${contatoId}>` : "Não informado", inline: true },
+          { name: "Observações", value: observacoes ?? "Nenhuma", inline: false },
+        )
+        .setFooter({ text: `Editado por ${interaction.user.displayName}` })
+        .setTimestamp(),
+    ],
+  });
 }
 
 async function listar(interaction: ChatInputCommandInteraction) {
@@ -245,17 +304,21 @@ async function listar(interaction: ChatInputCommandInteraction) {
       texto += `\n**— ${TIPO_LABEL[p.tipo] ?? p.tipo} —**\n`;
     }
     const contato = p.contato_discord_id ? ` | <@${p.contato_discord_id}>` : "";
-    texto += `\`#${p.id}\` **${p.nome}** — ${p.desconto_percent}% desconto${contato}\n`;
+    const produtos = db.prepare("SELECT COUNT(*) as total FROM parceria_produtos WHERE parceria_id = ?").get(p.id) as { total: number };
+    const produtosStr = produtos.total > 0 ? ` | ${produtos.total} produto(s)` : "";
+    texto += `\`#${p.id}\` **${p.nome}** — ${p.desconto_percent}% desconto${contato}${produtosStr}\n`;
   }
 
-  const embed = new EmbedBuilder()
-    .setColor(0x3498db)
-    .setTitle(`🤝 Parcerias Ativas (${parcerias.length})`)
-    .setDescription(texto)
-    .setFooter({ text: "Use /parceria ver <id> para mais detalhes" })
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x3498db)
+        .setTitle(`🤝 Parcerias Ativas (${parcerias.length})`)
+        .setDescription(texto)
+        .setFooter({ text: "Use /parceria ver <id> para mais detalhes" })
+        .setTimestamp(),
+    ],
+  });
 }
 
 async function ver(interaction: ChatInputCommandInteraction) {
@@ -268,20 +331,94 @@ async function ver(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const status = parceria.ativo ? "✅ Ativa" : "❌ Inativa";
+  const produtos = db
+    .prepare("SELECT * FROM parceria_produtos WHERE parceria_id = ? ORDER BY categoria, nome")
+    .all(id) as ParceriaProduto[];
+
+  let produtosTexto = "Nenhum produto cadastrado.";
+  if (produtos.length > 0) {
+    let categoriaAtual = "";
+    produtosTexto = "";
+    for (const p of produtos) {
+      if (p.categoria !== categoriaAtual) {
+        categoriaAtual = p.categoria;
+        produtosTexto += `**${CATEGORIA_LABEL[p.categoria] ?? p.categoria}**\n`;
+      }
+      const preco = p.preco ? ` — $${p.preco.toLocaleString()}` : "";
+      produtosTexto += `\`#${p.id}\` ${p.nome}${preco}\n`;
+    }
+  }
 
   const embed = new EmbedBuilder()
     .setColor(parceria.ativo ? 0x2ecc71 : 0x95a5a6)
     .setTitle(`🤝 Parceria #${parceria.id} — ${parceria.nome}`)
     .addFields(
-      { name: "Status", value: status, inline: true },
+      { name: "Status", value: parceria.ativo ? "✅ Ativa" : "❌ Inativa", inline: true },
       { name: "Tipo", value: TIPO_LABEL[parceria.tipo] ?? parceria.tipo, inline: true },
       { name: "Desconto", value: `${parceria.desconto_percent}%`, inline: true },
       { name: "Contato", value: parceria.contato_discord_id ? `<@${parceria.contato_discord_id}>` : "Não informado", inline: true },
       { name: "Cadastrada em", value: parceria.criado_em.split(" ")[0], inline: true },
       { name: "Observações", value: parceria.observacoes ?? "Nenhuma", inline: false },
+      { name: `📦 Produtos (${produtos.length})`, value: produtosTexto, inline: false },
     )
     .setTimestamp();
 
   await interaction.reply({ embeds: [embed] });
+}
+
+async function produtoAdicionar(interaction: ChatInputCommandInteraction) {
+  const parceriaId = interaction.options.getInteger("parceria_id", true);
+  const nome = interaction.options.getString("nome", true);
+  const categoria = interaction.options.getString("categoria", true);
+  const preco = interaction.options.getInteger("preco");
+
+  const parceria = db.prepare("SELECT * FROM parcerias WHERE id = ? AND ativo = 1").get(parceriaId) as Parceria | undefined;
+  if (!parceria) {
+    await interaction.reply({ content: `Parceria **#${parceriaId}** não encontrada ou inativa.`, ephemeral: true });
+    return;
+  }
+
+  const result = db.prepare(
+    "INSERT INTO parceria_produtos (parceria_id, nome, categoria, preco) VALUES (?, ?, ?, ?)",
+  ).run(parceriaId, nome, categoria, preco ?? null);
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle("✅ Produto Adicionado")
+        .addFields(
+          { name: "Parceria", value: `#${parceriaId} — ${parceria.nome}`, inline: true },
+          { name: "Produto ID", value: `#${result.lastInsertRowid}`, inline: true },
+          { name: "Nome", value: nome, inline: true },
+          { name: "Categoria", value: CATEGORIA_LABEL[categoria] ?? categoria, inline: true },
+          { name: "Preço", value: preco ? `$${preco.toLocaleString()}` : "Não informado", inline: true },
+        )
+        .setFooter({ text: `Adicionado por ${interaction.user.displayName}` })
+        .setTimestamp(),
+    ],
+  });
+}
+
+async function produtoRemover(interaction: ChatInputCommandInteraction) {
+  const produtoId = interaction.options.getInteger("produto_id", true);
+
+  const produto = db.prepare("SELECT * FROM parceria_produtos WHERE id = ?").get(produtoId) as ParceriaProduto | undefined;
+  if (!produto) {
+    await interaction.reply({ content: `Produto **#${produtoId}** não encontrado.`, ephemeral: true });
+    return;
+  }
+
+  db.prepare("DELETE FROM parceria_produtos WHERE id = ?").run(produtoId);
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xe74c3c)
+        .setTitle("Produto Removido")
+        .setDescription(`**${produto.nome}** foi removido da parceria.`)
+        .setFooter({ text: `Removido por ${interaction.user.displayName}` })
+        .setTimestamp(),
+    ],
+  });
 }

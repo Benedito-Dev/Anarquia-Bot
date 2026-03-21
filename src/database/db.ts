@@ -242,6 +242,16 @@ export function initDatabaseV2(): void {
       criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS parceria_produtos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      parceria_id INTEGER NOT NULL,
+      nome TEXT NOT NULL,
+      categoria TEXT NOT NULL DEFAULT 'outro',
+      preco INTEGER,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (parceria_id) REFERENCES parcerias(id)
+    );
+
     CREATE TABLE IF NOT EXISTS semanas_arquivadas (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       semana TEXT NOT NULL,

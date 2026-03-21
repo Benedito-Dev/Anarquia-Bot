@@ -107,16 +107,44 @@ async function registrar(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  // Verificar estoque se for fabricavel
+  // Se fabricavel, verificar se tem no estoque ou se tem materiais para produzir na hora
   if (produto.fabricavel) {
     const estoqueAtual = db.prepare("SELECT quantidade FROM estoque WHERE material = ?").get(nomeProduto) as { quantidade: number } | undefined;
     const qtdEstoque = estoqueAtual?.quantidade ?? 0;
+
     if (qtdEstoque < quantidade) {
-      await interaction.reply({
-        content: `Estoque insuficiente de **${nomeProduto}**. Tem ${qtdEstoque}, precisa de ${quantidade}.\nUse \`/estoque produzir\` primeiro.`,
-        ephemeral: true,
-      });
-      return;
+      // Tentar produzir na hora com os materiais disponíveis
+      const receita = db.prepare("SELECT material, quantidade FROM produto_receita WHERE produto_id = ?").all(produto.id) as Array<{ material: string; quantidade: number }>;
+      const faltando: string[] = [];
+
+      for (const item of receita) {
+        const mat = db.prepare("SELECT quantidade FROM estoque WHERE material = ?").get(item.material) as { quantidade: number } | undefined;
+        const disponivel = mat?.quantidade ?? 0;
+        const necessario = item.quantidade * quantidade;
+        if (disponivel < necessario) {
+          faltando.push(`${item.material}: precisa ${necessario}, tem ${disponivel}`);
+        }
+      }
+
+      if (faltando.length > 0) {
+        await interaction.reply({
+          content: `Sem estoque de **${nomeProduto}** e materiais insuficientes para produzir:\n${faltando.map(f => `• ${f}`).join("\n")}`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      // Produzir na hora
+      db.transaction(() => {
+        for (const item of receita) {
+          const necessario = item.quantidade * quantidade;
+          db.prepare("UPDATE estoque SET quantidade = quantidade - ? WHERE material = ?").run(necessario, item.material);
+          db.prepare("INSERT INTO estoque_log (material, quantidade, tipo, descricao, membro_discord_id) VALUES (?, ?, ?, ?, ?)").run(
+            item.material, -necessario, "producao", `Producao automatica de ${quantidade}x ${nomeProduto}`, discordId,
+          );
+        }
+        db.prepare("INSERT INTO producao_log (membro_discord_id, produto, quantidade_produtos) VALUES (?, ?, ?)").run(discordId, nomeProduto, quantidade);
+      })();
     }
   }
 

@@ -7,7 +7,7 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import db from "../database/db";
-import { CARGOS_ADMIN, getCargoLabel } from "../utils/semana";
+import { CARGOS_ADMIN, CARGOS_MEMBRO_ADMIN, getCargoLabel } from "../utils/semana";
 
 export const data = new SlashCommandBuilder()
   .setName("advertencia")
@@ -45,8 +45,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     .prepare("SELECT * FROM membros WHERE discord_id = ?")
     .get(interaction.user.id) as { cargo: string; nome: string } | undefined;
 
-  if (!admin || !CARGOS_ADMIN.includes(admin.cargo.toLowerCase())) {
-    await interaction.reply({ content: "Apenas **Sublider ou Lider** pode gerenciar advertencias.", ephemeral: true });
+  if (!admin || !CARGOS_MEMBRO_ADMIN.includes(admin.cargo.toLowerCase())) {
+    await interaction.reply({ content: "Apenas **Gerente ou superior** pode gerenciar advertencias.", ephemeral: true });
     return;
   }
 

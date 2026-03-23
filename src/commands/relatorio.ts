@@ -4,7 +4,7 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import db from "../database/db";
-import { getSemanaAtual, getMetaSemanal, getDiaAtual, getCargoLabel, CARGOS_ADMIN, getMetaDinheiroDiaria } from "../utils/semana";
+import { getSemanaAtual, getMetaSemanal, getDiaAtual, getCargoLabel, CARGOS_RELATORIO, getMetaDinheiroDiaria } from "../utils/semana";
 
 export const data = new SlashCommandBuilder()
   .setName("relatorio")
@@ -35,8 +35,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     .prepare("SELECT * FROM membros WHERE discord_id = ?")
     .get(interaction.user.id) as { cargo: string; nome: string } | undefined;
 
-  if (!admin || !CARGOS_ADMIN.includes(admin.cargo.toLowerCase())) {
-    await interaction.reply({ content: "Apenas **Sublider ou Lider** pode ver o relatorio.", ephemeral: true });
+  if (!admin || !CARGOS_RELATORIO.includes(admin.cargo.toLowerCase())) {
+    await interaction.reply({ content: "Apenas **Gerente de Farm ou superior** pode ver o relatorio.", ephemeral: true });
     return;
   }
 

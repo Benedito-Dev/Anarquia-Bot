@@ -18,6 +18,8 @@ export function getMetaDiaria(cargo: string): number {
     membro: 200,
     "farmer veterano": 200,
     gerente: 200,
+    "gerente de farm": 0,
+    "gerente de acao": 0,
     sublider: 0,
     lider: 0,
   };
@@ -35,6 +37,8 @@ export function getCargoLabel(cargo: string): string {
     membro: "Membro",
     "farmer veterano": "Farmer Veterano",
     gerente: "Gerente",
+    "gerente de farm": "Gerente de Farm",
+    "gerente de acao": "Gerente de Acao",
     sublider: "Sublider",
     lider: "Lider",
   };
@@ -56,12 +60,17 @@ export const CARGOS_VALIDOS = [
   "membro",
   "farmer veterano",
   "gerente",
+  "gerente de farm",
+  "gerente de acao",
   "sublider",
   "lider",
 ];
 
-export const CARGOS_GERENCIA = ["gerente", "sublider", "lider"];
+export const CARGOS_GERENCIA = ["gerente", "gerente de farm", "gerente de acao", "sublider", "lider"];
 export const CARGOS_ADMIN = ["sublider", "lider"];
+export const CARGOS_MEMBRO_ADMIN = ["gerente", "gerente de farm", "gerente de acao", "sublider", "lider"];
+export const CARGOS_ACAO = ["gerente de acao", "sublider", "lider"];
+export const CARGOS_RELATORIO = ["gerente de farm", "sublider", "lider"];
 
 export function registrarAuditoria(acao: string, executadoPor: string, alvo?: string, detalhes?: string): void {
   // importado dinamicamente para evitar dependencia circular

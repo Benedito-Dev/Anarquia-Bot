@@ -5,7 +5,7 @@ import {
   User,
 } from "discord.js";
 import db from "../database/db";
-import { CARGOS_ADMIN, getSemanaAtual } from "../utils/semana";
+import { CARGOS_ADMIN, CARGOS_ACAO, getSemanaAtual } from "../utils/semana";
 
 const PERCENT_PARTICIPANTES = 0.7;
 const PAGAMENTO_FIXO: Record<string, number> = {
@@ -67,8 +67,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     .prepare("SELECT * FROM membros WHERE discord_id = ?")
     .get(interaction.user.id) as { cargo: string; nome: string } | undefined;
 
-  if (!admin || !CARGOS_ADMIN.includes(admin.cargo.toLowerCase())) {
-    await interaction.reply({ content: "Apenas **Sublider ou Lider** pode registrar acoes.", ephemeral: true });
+  if (!admin || !CARGOS_ACAO.includes(admin.cargo.toLowerCase())) {
+    await interaction.reply({ content: "Apenas **Gerente de Acao ou superior** pode registrar acoes.", ephemeral: true });
     return;
   }
 

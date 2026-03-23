@@ -4,7 +4,7 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import db from "../database/db";
-import { CARGOS_VALIDOS, CARGOS_ADMIN, getCargoLabel, getMetaSemanal, getSemanaAtual, registrarAuditoria } from "../utils/semana";
+import { CARGOS_VALIDOS, CARGOS_ADMIN, CARGOS_MEMBRO_ADMIN, getCargoLabel, getMetaSemanal, getSemanaAtual, registrarAuditoria } from "../utils/semana";
 
 export const data = new SlashCommandBuilder()
   .setName("membro")
@@ -32,6 +32,8 @@ export const data = new SlashCommandBuilder()
             { name: "Membro", value: "membro" },
             { name: "Farmer Veterano", value: "farmer veterano" },
             { name: "Gerente", value: "gerente" },
+            { name: "Gerente de Farm", value: "gerente de farm" },
+            { name: "Gerente de Acao", value: "gerente de acao" },
             { name: "Sublider", value: "sublider" },
             { name: "Lider", value: "lider" },
           ),
@@ -54,6 +56,8 @@ export const data = new SlashCommandBuilder()
             { name: "Membro", value: "membro" },
             { name: "Farmer Veterano", value: "farmer veterano" },
             { name: "Gerente", value: "gerente" },
+            { name: "Gerente de Farm", value: "gerente de farm" },
+            { name: "Gerente de Acao", value: "gerente de acao" },
             { name: "Sublider", value: "sublider" },
             { name: "Lider", value: "lider" },
           ),
@@ -114,6 +118,8 @@ export const data = new SlashCommandBuilder()
             { name: "Membro", value: "membro" },
             { name: "Farmer Veterano", value: "farmer veterano" },
             { name: "Gerente", value: "gerente" },
+            { name: "Gerente de Farm", value: "gerente de farm" },
+            { name: "Gerente de Acao", value: "gerente de acao" },
             { name: "Sublider", value: "sublider" },
           ),
       ),
@@ -145,9 +151,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         .prepare("SELECT * FROM membros WHERE discord_id = ?")
         .get(interaction.user.id) as { cargo: string } | undefined;
 
-      if (!admin || !CARGOS_ADMIN.includes(admin.cargo.toLowerCase())) {
+      if (!admin || !CARGOS_MEMBRO_ADMIN.includes(admin.cargo.toLowerCase())) {
         await interaction.reply({
-          content: "Apenas **Sublider ou Lider** pode gerenciar membros.",
+          content: "Apenas **Gerente ou superior** pode gerenciar membros.",
           ephemeral: true,
         });
         return;

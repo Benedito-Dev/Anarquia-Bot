@@ -454,7 +454,7 @@ async function rebaixar(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const ordem = ["iniciante", "membro", "farmer veterano", "gerente", "sublider", "lider"];
+  const ordem = ["iniciante", "membro", "farmer veterano", "gerente", "gerente de farm", "gerente de acao", "sublider", "lider"];
   const indexAtual = ordem.indexOf(membro.cargo.toLowerCase());
   const indexNovo = ordem.indexOf(novoCargo);
 

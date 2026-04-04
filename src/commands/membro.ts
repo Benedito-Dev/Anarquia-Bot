@@ -93,8 +93,16 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub
-      .setName("historico")
-      .setDescription("Ver advertencias, promocoes e acoes de um membro (admin)")
+      .setName("historico_semana")
+      .setDescription("Ver historico da semana atual de um membro (gerencia+)")
+      .addUserOption((opt) =>
+        opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("historico_completo")
+      .setDescription("Ver historico completo de todas as semanas de um membro (gerencia+)")
       .addUserOption((opt) =>
         opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
       ),
@@ -170,8 +178,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await definirPassaporte(interaction);
   } else if (subcommand === "perfil") {
     await perfil(interaction);
-  } else if (subcommand === "historico") {
-    await historico(interaction);
+  } else if (subcommand === "historico_semana") {
+    await historicoSemana(interaction);
+  } else if (subcommand === "historico_completo") {
+    await historicoCompleto(interaction);
   } else if (subcommand === "folga") {
     await folga(interaction);
   } else if (subcommand === "rebaixar") {
@@ -541,7 +551,89 @@ async function folga(interaction: ChatInputCommandInteraction) {
   await interaction.reply({ embeds: [embed] });
 }
 
-async function historico(interaction: ChatInputCommandInteraction) {
+async function historicoSemana(interaction: ChatInputCommandInteraction) {
+  const usuario = interaction.options.getUser("usuario", true);
+  const semana = getSemanaAtual();
+
+  const membro = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ?")
+    .get(usuario.id) as { id: number; nome: string; cargo: string; criado_em: string } | undefined;
+
+  if (!membro) {
+    await interaction.reply({ content: `**${usuario.displayName}** nao esta cadastrado.`, ephemeral: true });
+    return;
+  }
+
+  const farm = db
+    .prepare("SELECT polvora, capsula, criado_em FROM farm_entregas WHERE membro_id = ? AND semana = ? ORDER BY id DESC")
+    .all(membro.id, semana) as Array<{ polvora: number; capsula: number; criado_em: string }>;
+
+  const pagamentos = db
+    .prepare("SELECT COALESCE(SUM(fp.valor_pago), 0) as total FROM farmer_pagamentos fp JOIN farm_entregas fe ON fp.farm_entrega_id = fe.id WHERE fp.membro_id = ? AND fe.semana = ?")
+    .get(membro.id, semana) as { total: number };
+
+  const bonus = db
+    .prepare("SELECT valor, descricao, criado_em FROM bonus_log WHERE membro_id = ? AND semana = ? ORDER BY id DESC")
+    .all(membro.id, semana) as Array<{ valor: number; descricao: string | null; criado_em: string }>;
+
+  const vendas = db
+    .prepare("SELECT tipo_municao, quantidade, valor_vendedor, criado_em FROM vendas WHERE vendedor_discord_id = ? AND criado_em >= date('now','weekday 0','-6 days') ORDER BY id DESC")
+    .all(usuario.id) as Array<{ tipo_municao: string; quantidade: number; valor_vendedor: number; criado_em: string }>;
+
+  const advertencias = db
+    .prepare("SELECT motivo, dado_por, criado_em FROM advertencias WHERE membro_id = ? AND criado_em >= date('now','weekday 0','-6 days') ORDER BY id DESC")
+    .all(membro.id) as Array<{ motivo: string; dado_por: string; criado_em: string }>;
+
+  const folga = db
+    .prepare("SELECT folga_dia FROM membros WHERE id = ?")
+    .get(membro.id) as { folga_dia: string | null };
+
+  const meta = getMetaSemanal(membro.cargo);
+  const totalPolvora = farm.reduce((acc, f) => acc + f.polvora, 0);
+  const totalCapsula = farm.reduce((acc, f) => acc + f.capsula, 0);
+  const totalBonus = bonus.reduce((acc, b) => acc + b.valor, 0);
+  const totalVendas = vendas.reduce((acc, v) => acc + v.valor_vendedor, 0);
+
+  const farmTexto = farm.length > 0
+    ? farm.map((f) => `🌾 ${f.polvora} polvora | ${f.capsula} capsula — ${f.criado_em.split(" ")[0]}`).join("\n")
+    : "Nenhuma entrega.";
+
+  const bonusTexto = bonus.length > 0
+    ? bonus.map((b) => `🎉 $${b.valor.toLocaleString()} — ${b.descricao ?? ""} (${b.criado_em.split(" ")[0]})`).join("\n")
+    : "Nenhum bonus.";
+
+  const vendasTexto = vendas.length > 0
+    ? vendas.map((v) => `🛒 ${v.quantidade}x ${v.tipo_municao.toUpperCase()} — $${v.valor_vendedor.toLocaleString()} (${v.criado_em.split(" ")[0]})`).join("\n")
+    : "Nenhuma venda.";
+
+  const advTexto = advertencias.length > 0
+    ? advertencias.map((a) => `⚠️ ${a.motivo} — <@${a.dado_por}> (${a.criado_em.split(" ")[0]})`).join("\n")
+    : "Nenhuma advertencia essa semana.";
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x3498db)
+        .setTitle(`📋 Historico Semana — ${membro.nome} (${semana})`)
+        .addFields(
+          { name: "Cargo", value: getCargoLabel(membro.cargo), inline: true },
+          { name: "Folga", value: folga.folga_dia ?? "Nenhuma", inline: true },
+          { name: "\u200b", value: "\u200b", inline: true },
+          { name: `🌾 Farm (${farm.length} entregas)`, value: farmTexto },
+          { name: "📊 Totais farm", value: `${totalPolvora} polvora | ${totalCapsula} capsula\nMeta: ${temMeta(membro.cargo) ? `${totalPolvora}/${meta.polvora} polvora` : "Sem meta"}`, inline: true },
+          { name: "💰 Pagamentos farm", value: `$${pagamentos.total.toLocaleString()}`, inline: true },
+          { name: "\u200b", value: "\u200b", inline: true },
+          { name: `🛒 Vendas (${vendas.length})`, value: vendasTexto },
+          { name: `🎉 Bonus (${bonus.length})`, value: bonusTexto },
+          { name: "⚠️ Advertencias", value: advTexto },
+          { name: "━━━ Total Ganhos ━━━", value: `$${(pagamentos.total + totalBonus + totalVendas).toLocaleString()}` },
+        )
+        .setTimestamp(),
+    ],
+  });
+}
+
+async function historicoCompleto(interaction: ChatInputCommandInteraction) {
   const usuario = interaction.options.getUser("usuario", true);
 
   const membro = db
@@ -553,48 +645,61 @@ async function historico(interaction: ChatInputCommandInteraction) {
     return;
   }
 
+  const farmTotal = db
+    .prepare("SELECT COALESCE(SUM(polvora), 0) as polvora, COALESCE(SUM(capsula), 0) as capsula, COUNT(*) as entregas FROM farm_entregas WHERE membro_id = ?")
+    .get(membro.id) as { polvora: number; capsula: number; entregas: number };
+
+  const pagamentosTotal = db
+    .prepare("SELECT COALESCE(SUM(valor_pago), 0) as total FROM farmer_pagamentos WHERE membro_id = ?")
+    .get(membro.id) as { total: number };
+
+  const bonusTotal = db
+    .prepare("SELECT COALESCE(SUM(valor), 0) as total, COUNT(*) as qtd FROM bonus_log WHERE membro_id = ?")
+    .get(membro.id) as { total: number; qtd: number };
+
+  const vendasTotal = db
+    .prepare("SELECT COUNT(*) as qtd, COALESCE(SUM(quantidade), 0) as municoes, COALESCE(SUM(valor_vendedor), 0) as ganhos FROM vendas WHERE vendedor_discord_id = ?")
+    .get(usuario.id) as { qtd: number; municoes: number; ganhos: number };
+
   const advertencias = db
     .prepare("SELECT motivo, dado_por, criado_em, ativa FROM advertencias WHERE membro_id = ? ORDER BY id DESC LIMIT 10")
     .all(membro.id) as Array<{ motivo: string; dado_por: string; criado_em: string; ativa: number }>;
 
   const auditoria = db
-    .prepare("SELECT acao, detalhes, criado_em FROM auditoria_log WHERE alvo = ? ORDER BY id DESC LIMIT 10")
+    .prepare("SELECT acao, detalhes, criado_em FROM auditoria_log WHERE alvo = ? ORDER BY id DESC LIMIT 15")
     .all(usuario.id) as Array<{ acao: string; detalhes: string | null; criado_em: string }>;
 
-  const acoes = db
-    .prepare("SELECT COUNT(*) as qtd, COALESCE(SUM(valor_recebido), 0) as total FROM acao_participantes WHERE discord_id = ?")
-    .get(usuario.id) as { qtd: number; total: number };
-
-  const farmTotal = db
-    .prepare("SELECT COALESCE(SUM(cobres), 0) as cobres, COUNT(*) as entregas FROM farm_entregas WHERE membro_id = ?")
-    .get(membro.id) as { cobres: number; entregas: number };
-
-  const vendasTotal = db
-    .prepare("SELECT COUNT(*) as qtd, COALESCE(SUM(quantidade_produtos), 0) as produtos FROM vendas WHERE vendedor_discord_id = ?")
-    .get(usuario.id) as { qtd: number; produtos: number };
+  const divida = db
+    .prepare("SELECT valor_devido FROM dividas WHERE membro_discord_id = ?")
+    .get(usuario.id) as { valor_devido: number } | undefined;
 
   const advTexto = advertencias.length > 0
-    ? advertencias.map((a) => `${a.ativa ? "⚠️" : "~~⚠️~~"} ${a.motivo} — <@${a.dado_por}> (${a.criado_em})`).join("\n")
+    ? advertencias.map((a) => `${a.ativa ? "⚠️" : "~~⚠️~~"} ${a.motivo} — <@${a.dado_por}> (${a.criado_em.split(" ")[0]})`).join("\n")
     : "Nenhuma advertencia.";
 
   const audTexto = auditoria.length > 0
-    ? auditoria.map((a) => `\`${a.acao}\` — ${a.detalhes ?? ""} (${a.criado_em})`).join("\n")
-    : "Nenhuma acao administrativa.";
+    ? auditoria.map((a) => `\`${a.acao}\` ${a.detalhes ? `— ${a.detalhes}` : ""} (${a.criado_em.split(" ")[0]})`).join("\n")
+    : "Nenhum registro administrativo.";
 
-  const embed = new EmbedBuilder()
-    .setColor(0x3498db)
-    .setTitle(`Historico — ${membro.nome}`)
-    .addFields(
-      { name: "Cargo atual", value: getCargoLabel(membro.cargo), inline: true },
-      { name: "Membro desde", value: membro.criado_em.split(" ")[0], inline: true },
-      { name: "\u200b", value: "\u200b", inline: true },
-      { name: "🌾 Farm total", value: `${farmTotal.cobres} cobres | ${farmTotal.entregas} entregas`, inline: true },
-      { name: "🛒 Vendas total", value: `${vendasTotal.produtos} produtos (${vendasTotal.qtd} vendas)`, inline: true },
-      { name: "⚔️ Acoes total", value: `${acoes.qtd} acoes | $${acoes.total.toLocaleString()}`, inline: true },
-      { name: "⚠️ Advertencias (ultimas 10)", value: advTexto },
-      { name: "📋 Log administrativo (ultimas 10)", value: audTexto },
-    )
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x9b59b6)
+        .setTitle(`📚 Historico Completo — ${membro.nome}`)
+        .addFields(
+          { name: "Cargo", value: getCargoLabel(membro.cargo), inline: true },
+          { name: "Membro desde", value: membro.criado_em.split(" ")[0], inline: true },
+          { name: "\u200b", value: "\u200b", inline: true },
+          { name: "🌾 Farm total", value: `${farmTotal.polvora} polvora | ${farmTotal.capsula} capsula\n${farmTotal.entregas} entregas`, inline: true },
+          { name: "💰 Ganhos farm", value: `$${pagamentosTotal.total.toLocaleString()}`, inline: true },
+          { name: "🎉 Bonus total", value: `$${bonusTotal.total.toLocaleString()} (${bonusTotal.qtd}x)`, inline: true },
+          { name: "🛒 Vendas total", value: `${vendasTotal.municoes} municoes (${vendasTotal.qtd} vendas)`, inline: true },
+          { name: "💰 Ganhos vendas", value: `$${vendasTotal.ganhos.toLocaleString()}`, inline: true },
+          { name: "💳 Divida atual", value: `$${(divida?.valor_devido ?? 0).toLocaleString()}`, inline: true },
+          { name: "⚠️ Advertencias (ultimas 10)", value: advTexto },
+          { name: "📋 Log administrativo (ultimas 15)", value: audTexto },
+        )
+        .setTimestamp(),
+    ],
+  });
 }

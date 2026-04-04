@@ -109,12 +109,7 @@ async function registrar(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  // Calcular pagamento: baseado no menor entre polvora/capsula (limitante de producao)
-  // Cada producao consome ~170-225 de cada material e gera 170 municoes
-  // Pagamento = producoes possiveis * preco_medio * PERCENT_FARMER
-  const precoMedioMunicao = 1000; // valor medio entre os tipos
-  const producoesEquivalentes = Math.floor(Math.min(polvora, capsula) / 175); // media dos custos
-  const valorPago = Math.round(producoesEquivalentes * MUNICOES_POR_PRODUCAO * precoMedioMunicao * PERCENT_FARMER);
+  const valorPago = Math.round(Math.min(polvora, capsula) * 150);
 
   const caixa = db.prepare("SELECT saldo FROM caixa LIMIT 1").get() as { saldo: number };
   if (valorPago > 0 && caixa.saldo < valorPago) {
@@ -160,7 +155,7 @@ async function registrar(interaction: ChatInputCommandInteraction) {
       { name: "\u200b", value: "\u200b", inline: true },
       { name: "Polvora", value: `${polvora}`, inline: true },
       { name: "Capsula", value: `${capsula}`, inline: true },
-      { name: "Pagamento (25%)", value: valorPago > 0 ? `$${valorPago.toLocaleString()}` : "Sem pagamento", inline: true },
+      { name: "Pagamento ($150/un)", value: valorPago > 0 ? `$${valorPago.toLocaleString()}` : "Sem pagamento", inline: true },
       { name: `Meta semanal (${meta.polvora} polvora)`, value: `${barra} ${progressoPolvora}% — ${totalSemana.polvora}/${meta.polvora}` },
       { name: "Ganhos da semana", value: `$${ganhosSemana.total.toLocaleString()}`, inline: true },
     )

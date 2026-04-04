@@ -7,7 +7,7 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import db from "../database/db";
-import { CARGOS_ADMIN, CARGOS_MEMBRO_ADMIN, getCargoLabel } from "../utils/semana";
+import { CARGOS_ADMIN, CARGOS_GERENCIA, getCargoLabel } from "../utils/semana";
 
 export const data = new SlashCommandBuilder()
   .setName("advertencia")
@@ -38,6 +38,9 @@ export const data = new SlashCommandBuilder()
       .addUserOption((opt) =>
         opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
       ),
+  )
+  .addSubcommand((sub) =>
+    sub.setName("listar").setDescription("Listar todos os membros com advertencias ativas (gerencia)"),
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -45,7 +48,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     .prepare("SELECT * FROM membros WHERE discord_id = ?")
     .get(interaction.user.id) as { cargo: string; nome: string } | undefined;
 
-  if (!admin || !CARGOS_MEMBRO_ADMIN.includes(admin.cargo.toLowerCase())) {
+  if (!admin || !CARGOS_GERENCIA.includes(admin.cargo.toLowerCase())) {
     await interaction.reply({ content: "Apenas **Gerente ou superior** pode gerenciar advertencias.", ephemeral: true });
     return;
   }
@@ -57,6 +60,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await remover(interaction, admin.nome);
   } else if (subcommand === "ver") {
     await ver(interaction);
+  } else if (subcommand === "listar") {
+    await listar(interaction);
   }
 }
 
@@ -215,6 +220,41 @@ async function remover(interaction: ChatInputCommandInteraction, adminNome: stri
     .setTimestamp();
 
   await interaction.reply({ embeds: [embed] });
+}
+
+async function listar(interaction: ChatInputCommandInteraction) {
+  const rows = db
+    .prepare(`
+      SELECT m.nome, m.cargo, m.discord_id, COUNT(a.id) as total
+      FROM membros m
+      JOIN advertencias a ON a.membro_id = m.id AND a.ativa = 1
+      WHERE m.ativo = 1
+      GROUP BY m.id
+      ORDER BY total DESC, m.nome ASC
+    `)
+    .all() as Array<{ nome: string; cargo: string; discord_id: string; total: number }>;
+
+  if (rows.length === 0) {
+    await interaction.reply({ content: "Nenhum membro com advertencias ativas.", ephemeral: true });
+    return;
+  }
+
+  let texto = "";
+  for (const r of rows) {
+    const emoji = r.total >= 3 ? "🔴" : r.total === 2 ? "🟠" : "🟡";
+    texto += `${emoji} **${r.nome}** (${getCargoLabel(r.cargo)}) — ${r.total}/3\n`;
+  }
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xe74c3c)
+        .setTitle(`⚠️ Membros com Advertencias Ativas (${rows.length})`)
+        .setDescription(texto)
+        .setFooter({ text: "Use /advertencia ver @usuario para detalhes" })
+        .setTimestamp(),
+    ],
+  });
 }
 
 async function ver(interaction: ChatInputCommandInteraction) {

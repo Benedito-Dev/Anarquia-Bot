@@ -8,6 +8,7 @@ db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
 export function initDatabase(): void {
+  // Tabelas que nunca mudam
   db.exec(`
     CREATE TABLE IF NOT EXISTS membros (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,125 +22,6 @@ export function initDatabase(): void {
       criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS farm_entregas (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      membro_id INTEGER NOT NULL,
-      cobres INTEGER NOT NULL DEFAULT 0,
-      aluminios INTEGER NOT NULL DEFAULT 0,
-      criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-      semana TEXT NOT NULL,
-      FOREIGN KEY (membro_id) REFERENCES membros(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS estoque (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      material TEXT UNIQUE NOT NULL,
-      quantidade INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE IF NOT EXISTS estoque_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      material TEXT NOT NULL,
-      quantidade INTEGER NOT NULL,
-      tipo TEXT NOT NULL,
-      descricao TEXT,
-      membro_discord_id TEXT,
-      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS producao_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      membro_discord_id TEXT NOT NULL,
-      produto TEXT NOT NULL DEFAULT 'c4',
-      quantidade_produtos INTEGER NOT NULL,
-      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS produtos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      nome TEXT UNIQUE NOT NULL,
-      preco_sem_parceria INTEGER NOT NULL,
-      preco_com_parceria INTEGER NOT NULL,
-      fabricavel INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS produto_receita (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      produto_id INTEGER NOT NULL,
-      material TEXT NOT NULL,
-      quantidade INTEGER NOT NULL,
-      FOREIGN KEY (produto_id) REFERENCES produtos(id)
-    );
-  `);
-
-  // Inicializar tabelas v2 (vendas, caixa, bonus)
-  initDatabaseV2();
-
-  // Migration: adicionar coluna produto em producao_log se nao existir
-  const colunasProducaoLog = db.prepare("PRAGMA table_info(producao_log)").all() as Array<{ name: string }>;
-  if (!colunasProducaoLog.some((c) => c.name === "produto")) {
-    db.exec("ALTER TABLE producao_log ADD COLUMN produto TEXT NOT NULL DEFAULT 'c4'");
-  }
-
-  // Migration: adicionar coluna passaporte se nao existir
-  const colunas = db.prepare("PRAGMA table_info(membros)").all() as Array<{ name: string }>;
-  if (!colunas.some((c) => c.name === "passaporte")) {
-    db.exec("ALTER TABLE membros ADD COLUMN passaporte INTEGER");
-  }
-  if (!colunas.some((c) => c.name === "folga_dia")) {
-    db.exec("ALTER TABLE membros ADD COLUMN folga_dia TEXT");
-  }
-
-  // Migration: adicionar coluna produto em vendas se nao existir
-  const colunasVendas = db.prepare("PRAGMA table_info(vendas)").all() as Array<{ name: string }>;
-  if (!colunasVendas.some((c) => c.name === "produto")) {
-    db.exec("ALTER TABLE vendas ADD COLUMN produto TEXT NOT NULL DEFAULT 'c4'");
-  }
-
-  // Inicializar materiais no estoque se nao existirem
-  const materiais = ["cobres", "aluminios", "lona", "plastico", "algodao", "couro", "chapa de metal", "lixo eletronico"];
-  for (const mat of materiais) {
-    const existe = db.prepare("SELECT id FROM estoque WHERE material = ?").get(mat);
-    if (!existe) db.prepare("INSERT INTO estoque (material, quantidade) VALUES (?, 0)").run(mat);
-  }
-
-  // Inicializar catalogo de produtos
-  initProdutos();
-}
-
-function initProdutos(): void {
-  const produtos: Array<{ nome: string; sem: number; com: number; fabricavel: number; receita: Array<[string, number]> }> = [
-    { nome: "c4",                  sem: 8300,  com: 6500,  fabricavel: 1, receita: [["aluminios", 6], ["cobres", 6]] },
-    { nome: "pager",               sem: 8300,  com: 6500,  fabricavel: 1, receita: [["aluminios", 12], ["chapa de metal", 8], ["plastico", 5]] },
-    { nome: "colete",              sem: 1200,  com: 910,   fabricavel: 1, receita: [["algodao", 6], ["plastico", 6]] },
-    { nome: "ticket de corrida",   sem: 4000,  com: 1300,  fabricavel: 0, receita: [] },
-    { nome: "cartao comum",        sem: 8300,  com: 6500,  fabricavel: 1, receita: [["cobres", 4], ["plastico", 4]] },
-    { nome: "cartao incomum",      sem: 15000, com: 13000, fabricavel: 1, receita: [["cobres", 6], ["plastico", 6]] },
-    { nome: "cartao raro",         sem: 21300, com: 19500, fabricavel: 1, receita: [["cobres", 5], ["plastico", 5]] },
-    { nome: "cartao epico",        sem: 44150, com: 42250, fabricavel: 1, receita: [["cobres", 5], ["plastico", 5]] },
-    { nome: "cartao lendario",     sem: 67000, com: 65000, fabricavel: 1, receita: [["cobres", 6], ["plastico", 6]] },
-    { nome: "mochila",             sem: 12300, com: 10000, fabricavel: 1, receita: [["algodao", 4], ["couro", 7], ["plastico", 2]] },
-    { nome: "algemas",             sem: 10500, com: 9000,  fabricavel: 0, receita: [] },
-    { nome: "bloqueador de sinal", sem: 650,   com: 390,   fabricavel: 1, receita: [["aluminios", 2], ["lona", 1], ["plastico", 5]] },
-    { nome: "attach unidade",      sem: 5200,  com: 4550,  fabricavel: 1, receita: [["aluminios", 4], ["lixo eletronico", 4]] },
-    { nome: "attach kit",          sem: 26000, com: 26000, fabricavel: 1, receita: [["aluminios", 20], ["lixo eletronico", 20]] },
-  ];
-
-  for (const p of produtos) {
-    const existe = db.prepare("SELECT id FROM produtos WHERE nome = ?").get(p.nome) as { id: number } | undefined;
-    if (!existe) {
-      const res = db.prepare("INSERT INTO produtos (nome, preco_sem_parceria, preco_com_parceria, fabricavel) VALUES (?, ?, ?, ?)").run(p.nome, p.sem, p.com, p.fabricavel);
-      for (const [mat, qtd] of p.receita) {
-        db.prepare("INSERT INTO produto_receita (produto_id, material, quantidade) VALUES (?, ?, ?)").run(res.lastInsertRowid, mat, qtd);
-      }
-    }
-  }
-}
-
-export default db;
-
-export function initDatabaseV2(): void {
-  db.exec(`
     CREATE TABLE IF NOT EXISTS caixa (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       saldo INTEGER NOT NULL DEFAULT 0
@@ -154,27 +36,30 @@ export function initDatabaseV2(): void {
       criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS farmer_pagamentos (
+    CREATE TABLE IF NOT EXISTS auditoria_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      acao TEXT NOT NULL,
+      executado_por TEXT NOT NULL,
+      alvo TEXT,
+      detalhes TEXT,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS advertencias (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       membro_id INTEGER NOT NULL,
-      farm_entrega_id INTEGER NOT NULL,
-      produtos_equivalentes INTEGER NOT NULL,
-      valor_pago INTEGER NOT NULL,
+      motivo TEXT NOT NULL,
+      dado_por TEXT NOT NULL,
+      ativa INTEGER NOT NULL DEFAULT 1,
       criado_em TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (membro_id) REFERENCES membros(id)
     );
 
-    CREATE TABLE IF NOT EXISTS vendas (
+    CREATE TABLE IF NOT EXISTS semanas_arquivadas (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      vendedor_discord_id TEXT NOT NULL,
-      produto TEXT NOT NULL DEFAULT 'c4',
-      quantidade_produtos INTEGER NOT NULL,
-      preco_unitario INTEGER NOT NULL,
-      com_parceria INTEGER NOT NULL DEFAULT 0,
-      receita_total INTEGER NOT NULL,
-      valor_vendedor INTEGER NOT NULL,
-      valor_familia INTEGER NOT NULL,
-      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+      semana TEXT NOT NULL,
+      dados_json TEXT NOT NULL,
+      arquivado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS bonus_log (
@@ -186,49 +71,6 @@ export function initDatabaseV2(): void {
       semana TEXT NOT NULL,
       criado_em TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (membro_id) REFERENCES membros(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS dinheiro_entregas (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      membro_id INTEGER NOT NULL,
-      valor INTEGER NOT NULL,
-      semana TEXT NOT NULL,
-      criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (membro_id) REFERENCES membros(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS dinheiro_pagamentos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      membro_id INTEGER NOT NULL,
-      entrega_id INTEGER NOT NULL,
-      valor_pago INTEGER NOT NULL,
-      criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (membro_id) REFERENCES membros(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS dividas (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      membro_discord_id TEXT NOT NULL,
-      valor_devido INTEGER NOT NULL DEFAULT 0,
-      atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS dividas_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      membro_discord_id TEXT NOT NULL,
-      tipo TEXT NOT NULL,
-      valor INTEGER NOT NULL,
-      descricao TEXT,
-      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS auditoria_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      acao TEXT NOT NULL,
-      executado_por TEXT NOT NULL,
-      alvo TEXT,
-      detalhes TEXT,
-      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS parcerias (
@@ -252,13 +94,6 @@ export function initDatabaseV2(): void {
       FOREIGN KEY (parceria_id) REFERENCES parcerias(id)
     );
 
-    CREATE TABLE IF NOT EXISTS semanas_arquivadas (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      semana TEXT NOT NULL,
-      dados_json TEXT NOT NULL,
-      arquivado_em TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
     CREATE TABLE IF NOT EXISTS vendas_canceladas (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       venda_id INTEGER NOT NULL,
@@ -267,30 +102,114 @@ export function initDatabaseV2(): void {
       criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS advertencias (
+    CREATE TABLE IF NOT EXISTS bot_config (
+      chave TEXT PRIMARY KEY,
+      valor TEXT NOT NULL
+    );
+  `);
+
+  initDatabaseV2();
+  runMigrations();
+}
+
+function initDatabaseV2(): void {
+  // Nova tabela farm_entregas com polvora/capsula
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS farm_entregas (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       membro_id INTEGER NOT NULL,
-      motivo TEXT NOT NULL,
-      dado_por TEXT NOT NULL,
-      ativa INTEGER NOT NULL DEFAULT 1,
+      polvora INTEGER NOT NULL DEFAULT 0,
+      capsula INTEGER NOT NULL DEFAULT 0,
+      semana TEXT NOT NULL,
       criado_em TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (membro_id) REFERENCES membros(id)
     );
 
-    CREATE TABLE IF NOT EXISTS acao_participantes (
+    CREATE TABLE IF NOT EXISTS farmer_pagamentos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      acao_id INTEGER NOT NULL,
-      discord_id TEXT NOT NULL,
-      valor_recebido INTEGER NOT NULL,
+      membro_id INTEGER NOT NULL,
+      farm_entrega_id INTEGER NOT NULL,
+      valor_pago INTEGER NOT NULL,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (membro_id) REFERENCES membros(id),
+      FOREIGN KEY (farm_entrega_id) REFERENCES farm_entregas(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS estoque (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      material TEXT UNIQUE NOT NULL,
+      quantidade INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS estoque_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      material TEXT NOT NULL,
+      quantidade INTEGER NOT NULL,
+      tipo TEXT NOT NULL,
+      descricao TEXT,
+      membro_discord_id TEXT,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS produtos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nome TEXT UNIQUE NOT NULL,
+      preco_sem_parceria INTEGER NOT NULL,
+      preco_com_parceria INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS produto_receita (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      produto_id INTEGER NOT NULL,
+      material TEXT NOT NULL,
+      quantidade INTEGER NOT NULL,
+      FOREIGN KEY (produto_id) REFERENCES produtos(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS producao_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      membro_discord_id TEXT NOT NULL,
+      produto TEXT NOT NULL,
+      quantidade_producoes INTEGER NOT NULL,
+      municoes_geradas INTEGER NOT NULL,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS vendas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vendedor_discord_id TEXT NOT NULL,
+      tipo_municao TEXT NOT NULL,
+      quantidade INTEGER NOT NULL,
+      preco_unitario INTEGER NOT NULL,
+      com_parceria INTEGER NOT NULL DEFAULT 0,
+      receita_total INTEGER NOT NULL,
+      valor_vendedor INTEGER NOT NULL,
+      valor_familia INTEGER NOT NULL,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dividas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      membro_discord_id TEXT NOT NULL,
+      valor_devido INTEGER NOT NULL DEFAULT 0,
+      atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dividas_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      membro_discord_id TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      valor INTEGER NOT NULL,
+      descricao TEXT,
       criado_em TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS acoes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tipo TEXT NOT NULL,
-      porte TEXT,
       valor_total INTEGER NOT NULL,
       valor_caixa INTEGER NOT NULL,
+      valor_por_membro INTEGER NOT NULL,
+      quantidade_membros INTEGER NOT NULL,
       registrado_por TEXT NOT NULL,
       semana TEXT NOT NULL,
       criado_em TEXT NOT NULL DEFAULT (datetime('now'))
@@ -303,3 +222,178 @@ export function initDatabaseV2(): void {
     db.prepare("INSERT INTO caixa (saldo) VALUES (0)").run();
   }
 }
+
+function runMigrations(): void {
+  // Migration: membros — garantir colunas novas
+  const colunasMembros = db.prepare("PRAGMA table_info(membros)").all() as Array<{ name: string }>;
+  if (!colunasMembros.some((c) => c.name === "folga_dia")) {
+    db.exec("ALTER TABLE membros ADD COLUMN folga_dia TEXT");
+  }
+
+  // Migration: farm_entregas — se ainda tiver colunas antigas (cobres/aluminios), recriar
+  const colunasFarm = db.prepare("PRAGMA table_info(farm_entregas)").all() as Array<{ name: string }>;
+  const temCobres = colunasFarm.some((c) => c.name === "cobres");
+  if (temCobres) {
+    db.pragma("foreign_keys = OFF");
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE farm_entregas_nova (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          membro_id INTEGER NOT NULL,
+          polvora INTEGER NOT NULL DEFAULT 0,
+          capsula INTEGER NOT NULL DEFAULT 0,
+          semana TEXT NOT NULL,
+          criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (membro_id) REFERENCES membros(id)
+        );
+      `);
+      // Dados antigos não são migrados pois cobres != polvora
+      db.exec("DROP TABLE farm_entregas");
+      db.exec("ALTER TABLE farm_entregas_nova RENAME TO farm_entregas");
+
+      // farmer_pagamentos pode ter FK para farm_entregas antiga, recriar também
+      db.exec("DROP TABLE IF EXISTS farmer_pagamentos");
+      db.exec(`
+        CREATE TABLE farmer_pagamentos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          membro_id INTEGER NOT NULL,
+          farm_entrega_id INTEGER NOT NULL,
+          valor_pago INTEGER NOT NULL,
+          criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (membro_id) REFERENCES membros(id),
+          FOREIGN KEY (farm_entrega_id) REFERENCES farm_entregas(id)
+        );
+      `);
+    })();
+    db.pragma("foreign_keys = ON");
+  }
+
+  // Migration: farmer_pagamentos — remover coluna produtos_equivalentes se existir
+  const colunasFarmerPag = db.prepare("PRAGMA table_info(farmer_pagamentos)").all() as Array<{ name: string }>;
+  if (colunasFarmerPag.some((c) => c.name === "produtos_equivalentes")) {
+    db.pragma("foreign_keys = OFF");
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE farmer_pagamentos_nova (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          membro_id INTEGER NOT NULL,
+          farm_entrega_id INTEGER NOT NULL,
+          valor_pago INTEGER NOT NULL,
+          criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (membro_id) REFERENCES membros(id),
+          FOREIGN KEY (farm_entrega_id) REFERENCES farm_entregas(id)
+        );
+      `);
+      db.exec("INSERT INTO farmer_pagamentos_nova (id, membro_id, farm_entrega_id, valor_pago, criado_em) SELECT id, membro_id, farm_entrega_id, valor_pago, criado_em FROM farmer_pagamentos");
+      db.exec("DROP TABLE farmer_pagamentos");
+      db.exec("ALTER TABLE farmer_pagamentos_nova RENAME TO farmer_pagamentos");
+    })();
+    db.pragma("foreign_keys = ON");
+  }
+
+  // Migration: vendas — recriar se ainda tiver estrutura antiga (coluna 'produto' no lugar de 'tipo_municao')
+  const colunasVendas = db.prepare("PRAGMA table_info(vendas)").all() as Array<{ name: string }>;
+  if (colunasVendas.some((c) => c.name === "produto") && !colunasVendas.some((c) => c.name === "tipo_municao")) {
+    db.pragma("foreign_keys = OFF");
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE vendas_nova (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          vendedor_discord_id TEXT NOT NULL,
+          tipo_municao TEXT NOT NULL,
+          quantidade INTEGER NOT NULL,
+          preco_unitario INTEGER NOT NULL,
+          com_parceria INTEGER NOT NULL DEFAULT 0,
+          receita_total INTEGER NOT NULL,
+          valor_vendedor INTEGER NOT NULL,
+          valor_familia INTEGER NOT NULL,
+          criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      // Dados antigos não migrados — estrutura incompatível
+      db.exec("DROP TABLE vendas");
+      db.exec("ALTER TABLE vendas_nova RENAME TO vendas");
+    })();
+    db.pragma("foreign_keys = ON");
+  }
+
+  // Migration: acoes — recriar se tiver estrutura antiga (coluna 'porte')
+  const colunasAcoes = db.prepare("PRAGMA table_info(acoes)").all() as Array<{ name: string }>;
+  if (colunasAcoes.some((c) => c.name === "porte")) {
+    db.pragma("foreign_keys = OFF");
+    db.transaction(() => {
+      // Dropar acao_participantes primeiro (dependia de acoes)
+      db.exec("DROP TABLE IF EXISTS acao_participantes");
+      db.exec(`
+        CREATE TABLE acoes_nova (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          valor_total INTEGER NOT NULL,
+          valor_caixa INTEGER NOT NULL,
+          valor_por_membro INTEGER NOT NULL,
+          quantidade_membros INTEGER NOT NULL,
+          registrado_por TEXT NOT NULL,
+          semana TEXT NOT NULL,
+          criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec("DROP TABLE acoes");
+      db.exec("ALTER TABLE acoes_nova RENAME TO acoes");
+    })();
+    db.pragma("foreign_keys = ON");
+  }
+
+  // Migration: produtos — recriar com munições se ainda tiver produtos antigos (c4, pager, etc)
+  const produtoAntigo = db.prepare("SELECT id FROM produtos WHERE nome = 'c4'").get();
+  if (produtoAntigo) {
+    db.transaction(() => {
+      db.exec("DELETE FROM produto_receita");
+      db.exec("DELETE FROM produtos");
+    })();
+  }
+
+  // Migration: estoque — remover materiais antigos e inserir polvora/capsula
+  const estoqueAntigo = db.prepare("SELECT id FROM estoque WHERE material = 'cobres'").get();
+  if (estoqueAntigo) {
+    db.transaction(() => {
+      db.exec("DELETE FROM estoque");
+      db.exec("DELETE FROM estoque_log");
+    })();
+  }
+
+  // Migration: remover tabelas de dinheiro sujo se existirem
+  db.pragma("foreign_keys = OFF");
+  db.exec("DROP TABLE IF EXISTS dinheiro_pagamentos");
+  db.exec("DROP TABLE IF EXISTS dinheiro_entregas");
+  db.pragma("foreign_keys = ON");
+
+  // Inicializar estoque com novos materiais
+  const materiais = ["polvora", "capsula"];
+  for (const mat of materiais) {
+    const existe = db.prepare("SELECT id FROM estoque WHERE material = ?").get(mat);
+    if (!existe) db.prepare("INSERT INTO estoque (material, quantidade) VALUES (?, 0)").run(mat);
+  }
+
+  // Inicializar catálogo de munições
+  initMunicoes();
+}
+
+function initMunicoes(): void {
+  const municoes: Array<{ nome: string; sem: number; com: number; polvora: number; capsula: number }> = [
+    { nome: "rifle",   sem: 1040, com: 910,  polvora: 225, capsula: 225 },
+    { nome: "smg",     sem: 799,  com: 650,  polvora: 175, capsula: 175 },
+    { nome: "pistola", sem: 650,  com: 520,  polvora: 130, capsula: 130 },
+    { nome: "doze",    sem: 1430, com: 1300, polvora: 180, capsula: 180 },
+    { nome: "barret",  sem: 1630, com: 1500, polvora: 170, capsula: 170 },
+  ];
+
+  for (const m of municoes) {
+    const existe = db.prepare("SELECT id FROM produtos WHERE nome = ?").get(m.nome) as { id: number } | undefined;
+    if (!existe) {
+      const res = db.prepare("INSERT INTO produtos (nome, preco_sem_parceria, preco_com_parceria) VALUES (?, ?, ?)").run(m.nome, m.sem, m.com);
+      db.prepare("INSERT INTO produto_receita (produto_id, material, quantidade) VALUES (?, ?, ?)").run(res.lastInsertRowid, "polvora", m.polvora);
+      db.prepare("INSERT INTO produto_receita (produto_id, material, quantidade) VALUES (?, ?, ?)").run(res.lastInsertRowid, "capsula", m.capsula);
+    }
+  }
+}
+
+export default db;

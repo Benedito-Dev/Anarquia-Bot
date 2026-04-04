@@ -10,19 +10,12 @@ import {
 import db from "../database/db";
 import { CARGOS_ADMIN, CARGOS_GERENCIA, registrarAuditoria } from "../utils/semana";
 
-const CHOICES_FABRICAVEIS = [
-  { name: "C4", value: "c4" },
-  { name: "Pager", value: "pager" },
-  { name: "Colete", value: "colete" },
-  { name: "Cartao Comum", value: "cartao comum" },
-  { name: "Cartao Incomum", value: "cartao incomum" },
-  { name: "Cartao Raro", value: "cartao raro" },
-  { name: "Cartao Epico", value: "cartao epico" },
-  { name: "Cartao Lendario", value: "cartao lendario" },
-  { name: "Mochila", value: "mochila" },
-  { name: "Bloqueador de Sinal", value: "bloqueador de sinal" },
-  { name: "Attach Unidade", value: "attach unidade" },
-  { name: "Attach Kit", value: "attach kit" },
+const CHOICES_MUNICOES = [
+  { name: "Rifle", value: "rifle" },
+  { name: "SMG", value: "smg" },
+  { name: "Pistola", value: "pistola" },
+  { name: "Doze", value: "doze" },
+  { name: "Barret", value: "barret" },
 ];
 
 export const data = new SlashCommandBuilder()
@@ -32,12 +25,12 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub
       .setName("produzir")
-      .setDescription("Fabricar produtos (gerente+)")
+      .setDescription("Fabricar municoes (gerente+)")
       .addStringOption((opt) =>
-        opt.setName("produto").setDescription("Produto a fabricar").setRequired(true).addChoices(...CHOICES_FABRICAVEIS),
+        opt.setName("tipo").setDescription("Tipo de municao").setRequired(true).addChoices(...CHOICES_MUNICOES),
       )
       .addIntegerOption((opt) =>
-        opt.setName("quantidade").setDescription("Quantidade a fabricar").setRequired(true).setMinValue(1),
+        opt.setName("quantidade").setDescription("Quantidade de producoes").setRequired(true).setMinValue(1),
       ),
   )
   .addSubcommand((sub) => sub.setName("historico").setDescription("Ultimas movimentacoes do estoque"))
@@ -46,7 +39,7 @@ export const data = new SlashCommandBuilder()
       .setName("ajuste")
       .setDescription("Ajuste manual do estoque (admin)")
       .addStringOption((opt) =>
-        opt.setName("material").setDescription("Material ou produto").setRequired(true).setAutocomplete(true),
+        opt.setName("material").setDescription("Material ou municao").setRequired(true).setAutocomplete(true),
       )
       .addIntegerOption((opt) =>
         opt.setName("quantidade").setDescription("Quantidade (negativo para remover)").setRequired(true),
@@ -67,41 +60,37 @@ export async function autocomplete(interaction: AutocompleteInteraction) {
 }
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-  const subcommand = interaction.options.getSubcommand();
-  if (subcommand === "ver") {
-    await ver(interaction);
-  } else if (subcommand === "produzir") {
-    await produzir(interaction);
-  } else if (subcommand === "historico") {
-    await historico(interaction);
-  } else if (subcommand === "ajuste") {
-    await ajuste(interaction);
-  }
+  const sub = interaction.options.getSubcommand();
+  if (sub === "ver") await ver(interaction);
+  else if (sub === "produzir") await produzir(interaction);
+  else if (sub === "historico") await historico(interaction);
+  else if (sub === "ajuste") await ajuste(interaction);
 }
 
 async function ver(interaction: ChatInputCommandInteraction) {
-  const estoques = db.prepare("SELECT material, quantidade FROM estoque ORDER BY material").all() as Array<{
-    material: string;
-    quantidade: number;
-  }>;
+  const materiais = db
+    .prepare("SELECT material, quantidade FROM estoque WHERE material IN ('polvora', 'capsula') ORDER BY material")
+    .all() as Array<{ material: string; quantidade: number }>;
 
-  const materiais = estoques.filter((e) => !["cobres", "aluminios"].includes(e.material) && !db.prepare("SELECT id FROM produtos WHERE nome = ?").get(e.material));
-  const materiasPrimas = estoques.filter((e) => ["cobres", "aluminios", "lona", "plastico", "algodao", "couro", "chapa de metal", "lixo eletronico"].includes(e.material));
-  const produtosProntos = estoques.filter((e) => db.prepare("SELECT id FROM produtos WHERE nome = ?").get(e.material));
+  const municoes = db
+    .prepare("SELECT e.material, e.quantidade FROM estoque e JOIN produtos p ON p.nome = e.material ORDER BY e.material")
+    .all() as Array<{ material: string; quantidade: number }>;
 
-  let textoMaterias = materiasPrimas.map((e) => `**${e.material}:** ${e.quantidade}`).join("\n") || "Vazio";
-  let textoProdutos = produtosProntos.map((e) => `**${e.material}:** ${e.quantidade}`).join("\n") || "Vazio";
+  const textoMateriais = materiais.map((e) => `**${e.material}:** ${e.quantidade}`).join("\n") || "Vazio";
+  const textoMunicoes = municoes.map((e) => `**${e.material.toUpperCase()}:** ${e.quantidade}`).join("\n") || "Vazio";
 
-  const embed = new EmbedBuilder()
-    .setColor(0x3498db)
-    .setTitle("Estoque da Familia")
-    .addFields(
-      { name: "🪨 Materias Primas", value: textoMaterias, inline: true },
-      { name: "📦 Produtos Prontos", value: textoProdutos, inline: true },
-    )
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x3498db)
+        .setTitle("Estoque da Familia")
+        .addFields(
+          { name: "🧪 Materiais", value: textoMateriais, inline: true },
+          { name: "💣 Municoes", value: textoMunicoes, inline: true },
+        )
+        .setTimestamp(),
+    ],
+  });
 }
 
 async function produzir(interaction: ChatInputCommandInteraction) {
@@ -112,19 +101,20 @@ async function produzir(interaction: ChatInputCommandInteraction) {
     .get(discordId) as { id: number; cargo: string; nome: string } | undefined;
 
   if (!membro || !CARGOS_GERENCIA.includes(membro.cargo.toLowerCase())) {
-    await interaction.reply({ content: "Apenas **Gerente ou superior** pode fabricar produtos.", ephemeral: true });
+    await interaction.reply({ content: "Apenas **Gerente ou superior** pode fabricar municoes.", ephemeral: true });
     return;
   }
 
-  const nomeProduto = interaction.options.getString("produto", true);
-  const quantidade = interaction.options.getInteger("quantidade", true);
+  const tipoMunicao = interaction.options.getString("tipo", true);
+  const quantidadeProducoes = interaction.options.getInteger("quantidade", true);
+  const MUNICOES_POR_PRODUCAO = 170;
 
   const produto = db
-    .prepare("SELECT * FROM produtos WHERE nome = ? AND fabricavel = 1")
-    .get(nomeProduto) as { id: number; nome: string } | undefined;
+    .prepare("SELECT * FROM produtos WHERE nome = ?")
+    .get(tipoMunicao) as { id: number; nome: string } | undefined;
 
   if (!produto) {
-    await interaction.reply({ content: `Produto **${nomeProduto}** nao e fabricavel.`, ephemeral: true });
+    await interaction.reply({ content: `Municao **${tipoMunicao}** nao encontrada.`, ephemeral: true });
     return;
   }
 
@@ -132,52 +122,52 @@ async function produzir(interaction: ChatInputCommandInteraction) {
     .prepare("SELECT material, quantidade FROM produto_receita WHERE produto_id = ?")
     .all(produto.id) as Array<{ material: string; quantidade: number }>;
 
-  // Verificar materiais suficientes
   for (const item of receita) {
     const estoque = db.prepare("SELECT quantidade FROM estoque WHERE material = ?").get(item.material) as { quantidade: number } | undefined;
     const disponivel = estoque?.quantidade ?? 0;
-    const necessario = item.quantidade * quantidade;
+    const necessario = item.quantidade * quantidadeProducoes;
     if (disponivel < necessario) {
-      await interaction.reply({
-        content: `Estoque insuficiente de **${item.material}**. Precisa de ${necessario}, tem ${disponivel}.`,
-        ephemeral: true,
-      });
+      await interaction.reply({ content: `Estoque insuficiente de **${item.material}**. Precisa ${necessario}, tem ${disponivel}.`, ephemeral: true });
       return;
     }
   }
 
+  const municoesGeradas = quantidadeProducoes * MUNICOES_POR_PRODUCAO;
+
   db.transaction(() => {
     for (const item of receita) {
-      const necessario = item.quantidade * quantidade;
+      const necessario = item.quantidade * quantidadeProducoes;
       db.prepare("UPDATE estoque SET quantidade = quantidade - ? WHERE material = ?").run(necessario, item.material);
-      db.prepare("INSERT INTO estoque_log (material, quantidade, tipo, descricao, membro_discord_id) VALUES (?, ?, ?, ?, ?)").run(item.material, -necessario, "producao", `Producao de ${quantidade}x ${nomeProduto}`, discordId);
+      db.prepare("INSERT INTO estoque_log (material, quantidade, tipo, descricao, membro_discord_id) VALUES (?, ?, ?, ?, ?)").run(item.material, -necessario, "producao", `Producao de ${quantidadeProducoes}x ${tipoMunicao}`, discordId);
     }
 
-    // Adicionar produto pronto ao estoque
-    const existeProduto = db.prepare("SELECT id FROM estoque WHERE material = ?").get(nomeProduto);
-    if (existeProduto) {
-      db.prepare("UPDATE estoque SET quantidade = quantidade + ? WHERE material = ?").run(quantidade, nomeProduto);
+    const existeMunicao = db.prepare("SELECT id FROM estoque WHERE material = ?").get(tipoMunicao);
+    if (existeMunicao) {
+      db.prepare("UPDATE estoque SET quantidade = quantidade + ? WHERE material = ?").run(municoesGeradas, tipoMunicao);
     } else {
-      db.prepare("INSERT INTO estoque (material, quantidade) VALUES (?, ?)").run(nomeProduto, quantidade);
+      db.prepare("INSERT INTO estoque (material, quantidade) VALUES (?, ?)").run(tipoMunicao, municoesGeradas);
     }
-    db.prepare("INSERT INTO estoque_log (material, quantidade, tipo, descricao, membro_discord_id) VALUES (?, ?, ?, ?, ?)").run(nomeProduto, quantidade, "producao", `Fabricado por ${membro.nome}`, discordId);
-    db.prepare("INSERT INTO producao_log (membro_discord_id, produto, quantidade_produtos) VALUES (?, ?, ?)").run(discordId, nomeProduto, quantidade);
+    db.prepare("INSERT INTO estoque_log (material, quantidade, tipo, descricao, membro_discord_id) VALUES (?, ?, ?, ?, ?)").run(tipoMunicao, municoesGeradas, "producao", `Fabricado por ${membro.nome}`, discordId);
+    db.prepare("INSERT INTO producao_log (membro_discord_id, produto, quantidade_producoes, municoes_geradas) VALUES (?, ?, ?, ?)").run(discordId, tipoMunicao, quantidadeProducoes, municoesGeradas);
   })();
 
-  const receitaTexto = receita.map((r) => `${r.quantidade * quantidade} ${r.material}`).join(" | ");
+  const receitaTexto = receita.map((r) => `${r.quantidade * quantidadeProducoes} ${r.material}`).join(" | ");
 
-  const embed = new EmbedBuilder()
-    .setColor(0x2ecc71)
-    .setTitle("Producao Concluida!")
-    .addFields(
-      { name: "Produto", value: nomeProduto, inline: true },
-      { name: "Quantidade", value: `${quantidade}`, inline: true },
-      { name: "Materiais usados", value: receitaTexto },
-    )
-    .setFooter({ text: `Fabricado por ${membro.nome}` })
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle("Producao Concluida!")
+        .addFields(
+          { name: "Tipo", value: tipoMunicao.toUpperCase(), inline: true },
+          { name: "Producoes", value: `${quantidadeProducoes}x`, inline: true },
+          { name: "Municoes geradas", value: `${municoesGeradas}`, inline: true },
+          { name: "Materiais usados", value: receitaTexto },
+        )
+        .setFooter({ text: `Fabricado por ${membro.nome}` })
+        .setTimestamp(),
+    ],
+  });
 }
 
 async function ajuste(interaction: ChatInputCommandInteraction) {
@@ -197,45 +187,38 @@ async function ajuste(interaction: ChatInputCommandInteraction) {
   const motivo = interaction.options.getString("motivo", true);
 
   const item = db.prepare("SELECT quantidade FROM estoque WHERE material = ?").get(material) as { quantidade: number } | undefined;
-
   if (!item) {
-    await interaction.reply({ content: `Material **${material}** nao encontrado no estoque.`, ephemeral: true });
+    await interaction.reply({ content: `Material **${material}** nao encontrado.`, ephemeral: true });
     return;
   }
 
   const novaQtd = item.quantidade + quantidade;
   if (novaQtd < 0) {
-    await interaction.reply({
-      content: `Quantidade insuficiente. Estoque atual: ${item.quantidade}, ajuste solicitado: ${quantidade}.`,
-      ephemeral: true,
-    });
+    await interaction.reply({ content: `Quantidade insuficiente. Estoque: ${item.quantidade}, ajuste: ${quantidade}.`, ephemeral: true });
     return;
   }
 
   db.transaction(() => {
     db.prepare("UPDATE estoque SET quantidade = ? WHERE material = ?").run(novaQtd, material);
-    db.prepare("INSERT INTO estoque_log (material, quantidade, tipo, descricao, membro_discord_id) VALUES (?, ?, ?, ?, ?)").run(
-      material, quantidade, "ajuste", motivo, discordId,
-    );
-    db.prepare("INSERT INTO auditoria_log (acao, executado_por, alvo, detalhes) VALUES (?, ?, ?, ?)").run(
-      "estoque_ajuste", discordId, material, `${quantidade > 0 ? "+" : ""}${quantidade} — ${motivo}`,
-    );
+    db.prepare("INSERT INTO estoque_log (material, quantidade, tipo, descricao, membro_discord_id) VALUES (?, ?, ?, ?, ?)").run(material, quantidade, "ajuste", motivo, discordId);
+    registrarAuditoria("estoque_ajuste", discordId, material, `${quantidade > 0 ? "+" : ""}${quantidade} — ${motivo}`);
   })();
 
-  const sinal = quantidade > 0 ? "+" : "";
-  const embed = new EmbedBuilder()
-    .setColor(quantidade > 0 ? 0x2ecc71 : 0xe74c3c)
-    .setTitle("Estoque Ajustado")
-    .addFields(
-      { name: "Material", value: material, inline: true },
-      { name: "Ajuste", value: `${sinal}${quantidade}`, inline: true },
-      { name: "Novo total", value: `${novaQtd}`, inline: true },
-      { name: "Motivo", value: motivo },
-    )
-    .setFooter({ text: `Por ${admin.nome}` })
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(quantidade > 0 ? 0x2ecc71 : 0xe74c3c)
+        .setTitle("Estoque Ajustado")
+        .addFields(
+          { name: "Material", value: material, inline: true },
+          { name: "Ajuste", value: `${quantidade > 0 ? "+" : ""}${quantidade}`, inline: true },
+          { name: "Novo total", value: `${novaQtd}`, inline: true },
+          { name: "Motivo", value: motivo },
+        )
+        .setFooter({ text: `Por ${admin.nome}` })
+        .setTimestamp(),
+    ],
+  });
 }
 
 const HISTORICO_POR_PAGINA = 5;
@@ -244,7 +227,7 @@ async function historico(interaction: ChatInputCommandInteraction) {
   const total = (db.prepare("SELECT COUNT(*) as total FROM estoque_log").get() as { total: number }).total;
 
   if (total === 0) {
-    await interaction.reply({ content: "Nenhuma movimentacao registrada ainda.", ephemeral: true });
+    await interaction.reply({ content: "Nenhuma movimentacao registrada.", ephemeral: true });
     return;
   }
 
@@ -260,7 +243,7 @@ async function historico(interaction: ChatInputCommandInteraction) {
     let texto = "";
     for (const log of logs) {
       const sinal = log.quantidade > 0 ? "+" : "";
-      const emoji = log.tipo === "entrada" ? "📥" : log.tipo === "producao" ? "🔨" : "📤";
+      const emoji = log.tipo === "entrada" ? "📥" : log.tipo === "producao" ? "🔨" : log.tipo === "venda" ? "🛒" : "📤";
       texto += `${emoji} **${log.material}** ${sinal}${log.quantidade} — ${log.descricao ?? log.tipo} (${log.criado_em})\n`;
     }
 
@@ -274,39 +257,19 @@ async function historico(interaction: ChatInputCommandInteraction) {
 
   const buildRow = (pag: number) =>
     new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId("estoque_anterior")
-        .setLabel("◀ Anterior")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(pag === 0),
-      new ButtonBuilder()
-        .setCustomId("estoque_proximo")
-        .setLabel("Próximo ▶")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(pag >= totalPaginas - 1),
+      new ButtonBuilder().setCustomId("estoque_anterior").setLabel("◀ Anterior").setStyle(ButtonStyle.Secondary).setDisabled(pag === 0),
+      new ButtonBuilder().setCustomId("estoque_proximo").setLabel("Próximo ▶").setStyle(ButtonStyle.Secondary).setDisabled(pag >= totalPaginas - 1),
     );
 
-  const reply = await interaction.reply({
-    embeds: [buildEmbed(pagina)],
-    components: totalPaginas > 1 ? [buildRow(pagina)] : [],
-    fetchReply: true,
-  });
-
+  const reply = await interaction.reply({ embeds: [buildEmbed(pagina)], components: totalPaginas > 1 ? [buildRow(pagina)] : [], fetchReply: true });
   if (totalPaginas <= 1) return;
 
   const collector = reply.createMessageComponentCollector({ time: 60000 });
-
   collector.on("collect", async (btn) => {
-    if (btn.user.id !== interaction.user.id) {
-      await btn.reply({ content: "Apenas quem usou o comando pode navegar.", ephemeral: true });
-      return;
-    }
+    if (btn.user.id !== interaction.user.id) { await btn.reply({ content: "Apenas quem usou o comando pode navegar.", ephemeral: true }); return; }
     if (btn.customId === "estoque_anterior") pagina = Math.max(0, pagina - 1);
     else pagina = Math.min(totalPaginas - 1, pagina + 1);
     await btn.update({ embeds: [buildEmbed(pagina)], components: [buildRow(pagina)] });
   });
-
-  collector.on("end", async () => {
-    await interaction.editReply({ components: [] });
-  });
+  collector.on("end", async () => { await interaction.editReply({ components: [] }); });
 }

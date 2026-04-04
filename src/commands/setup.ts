@@ -14,24 +14,16 @@ export const data = new SlashCommandBuilder()
   .setName("setup")
   .setDescription("Configuracoes do bot (admin)")
   .addSubcommand((sub) =>
-    sub
-      .setName("farm")
-      .setDescription("Posta a mensagem fixa de abertura de farm no canal atual (admin)"),
+    sub.setName("saldo").setDescription("Posta mensagem de saldo que se atualiza a cada 10 minutos (admin)"),
   )
   .addSubcommand((sub) =>
-    sub
-      .setName("lavagem")
-      .setDescription("Posta a mensagem fixa de abertura de lavagem no canal atual (admin)"),
+    sub.setName("farm").setDescription("Posta a mensagem de abertura de farm no canal atual (admin)"),
   )
   .addSubcommand((sub) =>
-    sub
-      .setName("limpar_farm")
-      .setDescription("Limpa todos os dados de farm/vendas/caixa mantendo apenas membros (admin)"),
+    sub.setName("limpar").setDescription("Limpa todos os dados mantendo apenas membros (admin)"),
   )
   .addSubcommand((sub) =>
-    sub
-      .setName("reset_semana")
-      .setDescription("Arquiva semana atual e reseta dados para nova semana (admin)"),
+    sub.setName("reset_semana").setDescription("Arquiva semana atual e reseta dados para nova semana (admin)"),
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -44,41 +36,46 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const subcommand = interaction.options.getSubcommand();
+  const sub = interaction.options.getSubcommand();
+  if (sub === "limpar") await limpar(interaction, admin.nome);
+  else if (sub === "reset_semana") await resetSemana(interaction, admin.nome);
+  else if (sub === "saldo") await saldo(interaction);
+  else await farm(interaction);
+}
 
-  if (subcommand === "limpar_farm") {
-    await limparFarm(interaction);
-    return;
-  }
+async function saldo(interaction: ChatInputCommandInteraction) {
+  const caixa = db.prepare("SELECT saldo FROM caixa LIMIT 1").get() as { saldo: number };
+  const estoque = db.prepare("SELECT material, quantidade FROM estoque ORDER BY material").all() as Array<{ material: string; quantidade: number }>;
 
-  if (subcommand === "lavagem") {
-    const rowLavagem = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId("abrir_lavagem")
-        .setLabel("💵 Abrir Lavagem")
-        .setStyle(ButtonStyle.Primary),
-    );
+  const embed = buildSaldoEmbed(caixa.saldo, estoque);
+  const msg = await (interaction.channel as TextChannel).send({ embeds: [embed] });
 
-    const embedLavagem = new EmbedBuilder()
-      .setColor(0x8e44ad)
-      .setTitle("💵 Canal de Lavagem")
-      .setDescription(
-        "Clique no botão abaixo para abrir seu canal privado de lavagem.\n\n" +
-        "Uma thread privada será criada entre você e a liderança.\n" +
-        "Use `/dinheiro registrar` dentro da thread para registrar suas entregas.",
-      )
-      .setFooter({ text: "Apenas membros cadastrados podem abrir uma thread." });
+  db.prepare("INSERT OR REPLACE INTO bot_config (chave, valor) VALUES ('saldo_message_id', ?)").run(msg.id);
+  db.prepare("INSERT OR REPLACE INTO bot_config (chave, valor) VALUES ('saldo_channel_id', ?)").run(interaction.channelId);
 
-    await interaction.reply({ content: "Mensagem de lavagem postada!", ephemeral: true });
-    await (interaction.channel as TextChannel).send({ embeds: [embedLavagem], components: [rowLavagem] });
-    return;
-  }
+  await interaction.reply({ content: "Mensagem de saldo postada! Sera atualizada a cada 10 minutos.", ephemeral: true });
+}
 
-  if (subcommand === "reset_semana") {
-    await resetSemana(interaction);
-    return;
-  }
+export function buildSaldoEmbed(saldo: number, estoque: Array<{ material: string; quantidade: number }>): EmbedBuilder {
+  const materiais = estoque.filter((e) => ["polvora", "capsula"].includes(e.material));
+  const municoes = estoque.filter((e) => !["polvora", "capsula"].includes(e.material));
 
+  const textoMateriais = materiais.map((e) => `**${e.material}:** ${e.quantidade}`).join("\n") || "Vazio";
+  const textoMunicoes = municoes.map((e) => `**${e.material.toUpperCase()}:** ${e.quantidade}`).join("\n") || "Vazio";
+
+  return new EmbedBuilder()
+    .setColor(0xf1c40f)
+    .setTitle("💰 Saldo Atual")
+    .addFields(
+      { name: "Caixa", value: `$${saldo.toLocaleString()}`, inline: false },
+      { name: "🧪 Materiais", value: textoMateriais, inline: true },
+      { name: "💣 Municoes", value: textoMunicoes, inline: true },
+    )
+    .setFooter({ text: "Atualizado em" })
+    .setTimestamp();
+}
+
+async function farm(interaction: ChatInputCommandInteraction) {
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId("abrir_farm")
@@ -90,7 +87,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     .setColor(0x00ae86)
     .setTitle("🌾 Canal de Farm")
     .setDescription(
-      "Clique no botão abaixo para abrir seu canal privado de farm.\n\n" +
+      "Clique no botao abaixo para abrir seu canal privado de farm.\n\n" +
       "Uma thread privada sera criada entre voce e a lideranca.\n" +
       "Use `/farm registrar` dentro da thread para registrar suas entregas.",
     )
@@ -100,25 +97,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   await (interaction.channel as TextChannel).send({ embeds: [embed], components: [row] });
 }
 
-async function limparFarm(interaction: ChatInputCommandInteraction) {
-  const admin = db
-    .prepare("SELECT * FROM membros WHERE discord_id = ?")
-    .get(interaction.user.id) as { cargo: string; nome: string } | undefined;
-
-  if (!admin || !CARGOS_ADMIN.includes(admin.cargo.toLowerCase())) {
-    await interaction.reply({ content: "Apenas **Sublider ou Lider** pode limpar os dados.", ephemeral: true });
-    return;
-  }
-
+async function limpar(interaction: ChatInputCommandInteraction, adminNome: string) {
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("confirmar_limpar_farm")
-      .setLabel("Confirmar Reset")
-      .setStyle(ButtonStyle.Danger),
-    new ButtonBuilder()
-      .setCustomId("cancelar_limpar_farm")
-      .setLabel("Cancelar")
-      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("confirmar_limpar").setLabel("Confirmar Reset").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId("cancelar_limpar").setLabel("Cancelar").setStyle(ButtonStyle.Secondary),
   );
 
   const embed = new EmbedBuilder()
@@ -128,7 +110,6 @@ async function limparFarm(interaction: ChatInputCommandInteraction) {
     .setTimestamp();
 
   const reply = await interaction.reply({ embeds: [embed], components: [row], fetchReply: true });
-
   const collector = reply.createMessageComponentCollector({ time: 30000 });
 
   collector.on("collect", async (btn) => {
@@ -137,17 +118,17 @@ async function limparFarm(interaction: ChatInputCommandInteraction) {
       return;
     }
 
-    if (btn.customId === "confirmar_limpar_farm") {
+    if (btn.customId === "confirmar_limpar") {
       db.transaction(() => {
         db.prepare("DELETE FROM farm_entregas").run();
         db.prepare("DELETE FROM farmer_pagamentos").run();
         db.prepare("DELETE FROM estoque_log").run();
         db.prepare("DELETE FROM producao_log").run();
         db.prepare("DELETE FROM vendas").run();
+        db.prepare("DELETE FROM vendas_canceladas").run();
         db.prepare("DELETE FROM caixa_log").run();
         db.prepare("DELETE FROM bonus_log").run();
         db.prepare("DELETE FROM acoes").run();
-        db.prepare("DELETE FROM acao_participantes").run();
         db.prepare("UPDATE estoque SET quantidade = 0").run();
         db.prepare("UPDATE caixa SET saldo = 0").run();
       })();
@@ -157,21 +138,15 @@ async function limparFarm(interaction: ChatInputCommandInteraction) {
           new EmbedBuilder()
             .setColor(0x2ecc71)
             .setTitle("✅ Dados Limpos")
-            .setDescription("Todos os dados de farm, vendas, estoque e caixa foram resetados.\nMembros e advertencias foram mantidos.")
-            .setFooter({ text: `Executado por ${admin.nome}` })
+            .setDescription("Todos os dados foram resetados.\nMembros e advertencias foram mantidos.")
+            .setFooter({ text: `Executado por ${adminNome}` })
             .setTimestamp(),
         ],
         components: [],
       });
     } else {
       await btn.update({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0x95a5a6)
-            .setTitle("Operacao Cancelada")
-            .setDescription("Nenhum dado foi apagado.")
-            .setTimestamp(),
-        ],
+        embeds: [new EmbedBuilder().setColor(0x95a5a6).setTitle("Operacao Cancelada").setDescription("Nenhum dado foi apagado.").setTimestamp()],
         components: [],
       });
     }
@@ -179,22 +154,11 @@ async function limparFarm(interaction: ChatInputCommandInteraction) {
   });
 
   collector.on("end", async (_, reason) => {
-    if (reason === "time") {
-      await interaction.editReply({ components: [] });
-    }
+    if (reason === "time") await interaction.editReply({ components: [] });
   });
 }
 
-async function resetSemana(interaction: ChatInputCommandInteraction) {
-  const admin = db
-    .prepare("SELECT * FROM membros WHERE discord_id = ?")
-    .get(interaction.user.id) as { cargo: string; nome: string } | undefined;
-
-  if (!admin || !CARGOS_ADMIN.includes(admin.cargo.toLowerCase())) {
-    await interaction.reply({ content: "Apenas **Sublider ou Lider** pode executar o reset de semana.", ephemeral: true });
-    return;
-  }
-
+async function resetSemana(interaction: ChatInputCommandInteraction, adminNome: string) {
   const semana = getSemanaAtual();
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -205,7 +169,7 @@ async function resetSemana(interaction: ChatInputCommandInteraction) {
   const embed = new EmbedBuilder()
     .setColor(0xe74c3c)
     .setTitle("⚠️ Reset de Semana")
-    .setDescription(`Isso vai **arquivar** os dados da semana **${semana}** e resetar farm, dinheiro, vendas, estoque e caixa.\nMembros, advertencias e dividas serao mantidos.\n\nTem certeza?`)
+    .setDescription(`Isso vai **arquivar** os dados da semana **${semana}** e resetar farm, vendas, estoque e caixa.\nMembros, advertencias e dividas serao mantidos.\n\nTem certeza?`)
     .setTimestamp();
 
   const reply = await interaction.reply({ embeds: [embed], components: [row], fetchReply: true });
@@ -218,21 +182,18 @@ async function resetSemana(interaction: ChatInputCommandInteraction) {
     }
 
     if (btn.customId === "confirmar_reset_semana") {
-      // Coletar dados da semana para arquivar
-      const farmSemana = db.prepare("SELECT COALESCE(SUM(cobres),0) as cobres, COALESCE(SUM(aluminios),0) as aluminios, COUNT(*) as entregas FROM farm_entregas WHERE semana = ?").get(semana);
+      const farmSemana = db.prepare("SELECT COALESCE(SUM(polvora),0) as polvora, COALESCE(SUM(capsula),0) as capsula, COUNT(*) as entregas FROM farm_entregas WHERE semana = ?").get(semana);
       const vendasSemana = db.prepare("SELECT COUNT(*) as qtd, COALESCE(SUM(receita_total),0) as receita FROM vendas WHERE criado_em >= date('now','weekday 0','-6 days')").get();
-      const dinheiroSemana = db.prepare("SELECT COALESCE(SUM(valor),0) as total, COUNT(*) as entregas FROM dinheiro_entregas WHERE semana = ?").get(semana);
+      const acoesSemana = db.prepare("SELECT COUNT(*) as qtd, COALESCE(SUM(valor_total),0) as total FROM acoes WHERE semana = ?").get(semana);
       const caixa = db.prepare("SELECT saldo FROM caixa LIMIT 1").get() as { saldo: number };
       const bonusTotal = db.prepare("SELECT COALESCE(SUM(valor),0) as total FROM bonus_log WHERE semana = ?").get(semana);
 
-      const dadosJson = JSON.stringify({ semana, farm: farmSemana, vendas: vendasSemana, dinheiro: dinheiroSemana, saldoCaixa: caixa.saldo, bonus: bonusTotal });
+      const dadosJson = JSON.stringify({ semana, farm: farmSemana, vendas: vendasSemana, acoes: acoesSemana, saldoCaixa: caixa.saldo, bonus: bonusTotal });
 
       db.transaction(() => {
         db.prepare("INSERT INTO semanas_arquivadas (semana, dados_json) VALUES (?, ?)").run(semana, dadosJson);
         db.prepare("DELETE FROM farm_entregas").run();
         db.prepare("DELETE FROM farmer_pagamentos").run();
-        db.prepare("DELETE FROM dinheiro_entregas").run();
-        db.prepare("DELETE FROM dinheiro_pagamentos").run();
         db.prepare("DELETE FROM estoque_log").run();
         db.prepare("DELETE FROM producao_log").run();
         db.prepare("DELETE FROM vendas").run();
@@ -240,11 +201,10 @@ async function resetSemana(interaction: ChatInputCommandInteraction) {
         db.prepare("DELETE FROM caixa_log").run();
         db.prepare("DELETE FROM bonus_log").run();
         db.prepare("DELETE FROM acoes").run();
-        db.prepare("DELETE FROM acao_participantes").run();
         db.prepare("UPDATE estoque SET quantidade = 0").run();
         db.prepare("UPDATE caixa SET saldo = 0").run();
         db.prepare("INSERT INTO auditoria_log (acao, executado_por, alvo, detalhes) VALUES (?, ?, ?, ?)").run(
-          "reset_semana", interaction.user.id, semana, `Semana arquivada por ${admin.nome}`,
+          "reset_semana", interaction.user.id, semana, `Semana arquivada por ${adminNome}`,
         );
       })();
 
@@ -254,7 +214,7 @@ async function resetSemana(interaction: ChatInputCommandInteraction) {
             .setColor(0x2ecc71)
             .setTitle("✅ Semana Arquivada e Resetada")
             .setDescription(`Semana **${semana}** arquivada com sucesso.\nTodos os dados foram resetados para a nova semana.`)
-            .setFooter({ text: `Executado por ${admin.nome}` })
+            .setFooter({ text: `Executado por ${adminNome}` })
             .setTimestamp(),
         ],
         components: [],

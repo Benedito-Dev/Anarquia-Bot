@@ -4,7 +4,7 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import db from "../database/db";
-import { CARGOS_VALIDOS, CARGOS_ADMIN, CARGOS_MEMBRO_ADMIN, getCargoLabel, getMetaSemanal, getSemanaAtual, registrarAuditoria } from "../utils/semana";
+import { CARGOS_VALIDOS, CARGOS_ADMIN, getCargoLabel, getMetaSemanal, temMeta, getSemanaAtual, registrarAuditoria } from "../utils/semana";
 
 export const data = new SlashCommandBuilder()
   .setName("membro")
@@ -30,7 +30,6 @@ export const data = new SlashCommandBuilder()
           .addChoices(
             { name: "Iniciante", value: "iniciante" },
             { name: "Membro", value: "membro" },
-            { name: "Farmer Veterano", value: "farmer veterano" },
             { name: "Gerente", value: "gerente" },
             { name: "Gerente de Farm", value: "gerente de farm" },
             { name: "Gerente de Acao", value: "gerente de acao" },
@@ -54,7 +53,6 @@ export const data = new SlashCommandBuilder()
           .addChoices(
             { name: "Iniciante", value: "iniciante" },
             { name: "Membro", value: "membro" },
-            { name: "Farmer Veterano", value: "farmer veterano" },
             { name: "Gerente", value: "gerente" },
             { name: "Gerente de Farm", value: "gerente de farm" },
             { name: "Gerente de Acao", value: "gerente de acao" },
@@ -116,7 +114,6 @@ export const data = new SlashCommandBuilder()
           .addChoices(
             { name: "Iniciante", value: "iniciante" },
             { name: "Membro", value: "membro" },
-            { name: "Farmer Veterano", value: "farmer veterano" },
             { name: "Gerente", value: "gerente" },
             { name: "Gerente de Farm", value: "gerente de farm" },
             { name: "Gerente de Acao", value: "gerente de acao" },
@@ -151,9 +148,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         .prepare("SELECT * FROM membros WHERE discord_id = ?")
         .get(interaction.user.id) as { cargo: string } | undefined;
 
-      if (!admin || !CARGOS_MEMBRO_ADMIN.includes(admin.cargo.toLowerCase())) {
+      if (!admin || !CARGOS_ADMIN.includes(admin.cargo.toLowerCase())) {
         await interaction.reply({
-          content: "Apenas **Gerente ou superior** pode gerenciar membros.",
+          content: "Apenas **Sublider ou Lider** pode gerenciar membros.",
           ephemeral: true,
         });
         return;
@@ -228,7 +225,7 @@ async function cadastrar(interaction: ChatInputCommandInteraction) {
       { name: "Nome", value: usuario.displayName, inline: true },
       { name: "Passaporte", value: passaporte, inline: true },
       { name: "Cargo", value: getCargoLabel(cargo), inline: true },
-      { name: "Meta diaria", value: meta > 0 ? `${meta} cobres` : "Sem meta", inline: true },
+      { name: "Meta semanal", value: temMeta(cargo) ? `${meta.polvora} polvora / ${meta.capsula} capsula` : "Sem meta", inline: true },
     )
     .setTimestamp();
 
@@ -259,7 +256,7 @@ async function promover(interaction: ChatInputCommandInteraction) {
       { name: "Nome", value: usuario.displayName, inline: true },
       { name: "Cargo anterior", value: getCargoLabel(cargoAnterior), inline: true },
       { name: "Novo cargo", value: getCargoLabel(novoCargo), inline: true },
-      { name: "Nova meta", value: getMetaSemanal(novoCargo) > 0 ? `${getMetaSemanal(novoCargo)} cobres/semana` : "Sem meta", inline: true },
+      { name: "Nova meta", value: temMeta(novoCargo) ? `${getMetaSemanal(novoCargo).polvora} polvora / ${getMetaSemanal(novoCargo).capsula} capsula` : "Sem meta", inline: true },
     )
     .setTimestamp();
 
@@ -268,7 +265,7 @@ async function promover(interaction: ChatInputCommandInteraction) {
 
 async function listar(interaction: ChatInputCommandInteraction) {
   const membros = db
-    .prepare("SELECT discord_id, nome, passaporte, cargo FROM membros WHERE ativo = 1 ORDER BY CASE cargo WHEN 'lider' THEN 1 WHEN 'sublider' THEN 2 WHEN 'gerente' THEN 3 WHEN 'farmer veterano' THEN 4 WHEN 'membro' THEN 5 WHEN 'iniciante' THEN 6 END")
+    .prepare("SELECT discord_id, nome, passaporte, cargo FROM membros WHERE ativo = 1 ORDER BY CASE cargo WHEN 'lider' THEN 1 WHEN 'sublider' THEN 2 WHEN 'gerente de acao' THEN 3 WHEN 'gerente de farm' THEN 4 WHEN 'gerente' THEN 5 WHEN 'membro' THEN 6 WHEN 'iniciante' THEN 7 END")
     .all() as Array<{ discord_id: string; nome: string; passaporte: string | null; cargo: string }>;
 
   if (membros.length === 0) {
@@ -389,7 +386,7 @@ async function perfil(interaction: ChatInputCommandInteraction) {
     .get(membro.id, semana) as { cobres: number; aluminios: number; entregas: number };
 
   const meta = getMetaSemanal(membro.cargo);
-  const progresso = meta > 0 ? Math.min(100, Math.round((farmSemana.cobres / meta) * 100)) : 100;
+  const progresso = temMeta(membro.cargo) ? Math.min(100, Math.round((farmSemana.cobres / meta.polvora) * 100)) : 100;
 
   // Ganhos farm da semana
   const ganhosFarm = db
@@ -426,7 +423,7 @@ async function perfil(interaction: ChatInputCommandInteraction) {
       { name: "Passaporte", value: membro.passaporte ?? "Nao definido", inline: true },
       { name: "Membro desde", value: membro.criado_em.split(" ")[0], inline: true },
       { name: "━━━ Semana Atual ━━━", value: "\u200b" },
-      { name: "🌾 Farm", value: `${farmSemana.cobres} cobres | ${farmSemana.entregas} entregas\nMeta: ${meta > 0 ? `${progresso}% (${farmSemana.cobres}/${meta})` : "Sem meta"}`, inline: true },
+      { name: "🌾 Farm", value: `${farmSemana.cobres} cobres | ${farmSemana.entregas} entregas\nMeta: ${temMeta(membro.cargo) ? `${progresso}% (${farmSemana.cobres}/${meta.polvora})` : "Sem meta"}`, inline: true },
       { name: "🛒 Vendas", value: `${vendasSemana.produtos} produtos (${vendasSemana.qtd} vendas)`, inline: true },
       { name: "⚔️ Acoes", value: `${acoesSemana.qtd} acoes | $${acoesSemana.total.toLocaleString()}`, inline: true },
       { name: "💰 Ganhos farm", value: `$${ganhosFarm.total.toLocaleString()}`, inline: true },
@@ -454,7 +451,7 @@ async function rebaixar(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const ordem = ["iniciante", "membro", "farmer veterano", "gerente", "gerente de farm", "gerente de acao", "sublider", "lider"];
+  const ordem = ["iniciante", "membro", "gerente", "gerente de farm", "gerente de acao", "sublider", "lider"];
   const indexAtual = ordem.indexOf(membro.cargo.toLowerCase());
   const indexNovo = ordem.indexOf(novoCargo);
 

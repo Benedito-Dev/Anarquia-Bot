@@ -2,64 +2,26 @@ import {
   ChatInputCommandInteraction,
   EmbedBuilder,
   SlashCommandBuilder,
-  User,
 } from "discord.js";
 import db from "../database/db";
-import { CARGOS_ADMIN, CARGOS_ACAO, getSemanaAtual } from "../utils/semana";
-
-const PERCENT_PARTICIPANTES = 0.7;
-const PAGAMENTO_FIXO: Record<string, number> = {
-  pequena: 5000,
-  media: 10000,
-  grande: 20000,
-};
-
-function buildParticipantesOptions(sub: any) {
-  for (let i = 1; i <= 12; i++) {
-    sub.addUserOption((opt: any) =>
-      opt
-        .setName(`participante${i}`)
-        .setDescription(`Participante ${i}`)
-        .setRequired(i === 1),
-    );
-  }
-  return sub;
-}
+import { CARGOS_ACAO, PERCENT_CAIXA_ACAO, PERCENT_PARTICIPANTES_ACAO, getSemanaAtual } from "../utils/semana";
 
 export const data = new SlashCommandBuilder()
   .setName("acao")
-  .setDescription("Setor operacional — registrar acoes")
+  .setDescription("Setor operacional — registrar acoes (gerente de acao+)")
   .addSubcommand((sub) =>
-    buildParticipantesOptions(
-      sub
-        .setName("com_dinheiro")
-        .setDescription("Acao que gerou dinheiro (70% participantes / 30% caixa)")
-        .addIntegerOption((opt: any) =>
-          opt
-            .setName("valor_total")
-            .setDescription("Valor total gerado na acao")
-            .setRequired(true)
-            .setMinValue(1),
-        ),
-    ),
+    sub
+      .setName("registrar")
+      .setDescription("Registrar acao com dinheiro (70% caixa / 30% participantes)")
+      .addIntegerOption((opt) =>
+        opt.setName("valor_total").setDescription("Valor total gerado na acao").setRequired(true).setMinValue(1),
+      )
+      .addIntegerOption((opt) =>
+        opt.setName("membros").setDescription("Quantidade de membros participantes").setRequired(true).setMinValue(1),
+      ),
   )
   .addSubcommand((sub) =>
-    buildParticipantesOptions(
-      sub
-        .setName("sem_dinheiro")
-        .setDescription("Acao sem dinheiro — pagamento fixo por participante")
-        .addStringOption((opt: any) =>
-          opt
-            .setName("porte")
-            .setDescription("Porte da acao")
-            .setRequired(true)
-            .addChoices(
-              { name: "Pequena (5k por pessoa)", value: "pequena" },
-              { name: "Media (10k por pessoa)", value: "media" },
-              { name: "Grande (20k por pessoa)", value: "grande" },
-            ),
-        ),
-    ),
+    sub.setName("historico").setDescription("Historico de acoes da semana"),
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -72,113 +34,85 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const participantes: User[] = [];
-  for (let i = 1; i <= 12; i++) {
-    const user = interaction.options.getUser(`participante${i}`);
-    if (user) participantes.push(user);
-  }
-
-  const subcommand = interaction.options.getSubcommand();
-  if (subcommand === "com_dinheiro") {
-    await comDinheiro(interaction, participantes, admin.nome);
-  } else if (subcommand === "sem_dinheiro") {
-    await semDinheiro(interaction, participantes, admin.nome);
-  }
+  const sub = interaction.options.getSubcommand();
+  if (sub === "registrar") await registrar(interaction, admin.nome);
+  else if (sub === "historico") await historico(interaction);
 }
 
-async function comDinheiro(interaction: ChatInputCommandInteraction, participantes: User[], adminNome: string) {
+async function registrar(interaction: ChatInputCommandInteraction, adminNome: string) {
   const valorTotal = interaction.options.getInteger("valor_total", true);
-  const valorParticipantes = Math.round(valorTotal * PERCENT_PARTICIPANTES);
-  const valorCaixa = valorTotal - valorParticipantes;
-  const valorPorPessoa = Math.round(valorParticipantes / participantes.length);
+  const quantidadeMembros = interaction.options.getInteger("membros", true);
   const semana = getSemanaAtual();
+
+  const valorCaixa = Math.round(valorTotal * PERCENT_CAIXA_ACAO);
+  const valorParticipantes = Math.round(valorTotal * PERCENT_PARTICIPANTES_ACAO);
+  const valorPorMembro = Math.round(valorParticipantes / quantidadeMembros);
 
   db.transaction(() => {
-    const acao = db.prepare(
-      "INSERT INTO acoes (tipo, porte, valor_total, valor_caixa, registrado_por, semana) VALUES (?, ?, ?, ?, ?, ?)",
-    ).run("com_dinheiro", null, valorTotal, valorCaixa, interaction.user.id, semana);
-
-    for (const p of participantes) {
-      db.prepare(
-        "INSERT INTO acao_participantes (acao_id, discord_id, valor_recebido) VALUES (?, ?, ?)",
-      ).run(acao.lastInsertRowid, p.id, valorPorPessoa);
-    }
+    db.prepare(
+      "INSERT INTO acoes (valor_total, valor_caixa, valor_por_membro, quantidade_membros, registrado_por, semana) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(valorTotal, valorCaixa, valorPorMembro, quantidadeMembros, interaction.user.id, semana);
 
     db.prepare("UPDATE caixa SET saldo = saldo + ?").run(valorCaixa);
-    db.prepare(
-      "INSERT INTO caixa_log (tipo, valor, descricao, membro_discord_id) VALUES (?, ?, ?, ?)",
-    ).run("acao", valorCaixa, `Acao com dinheiro — ${participantes.length} participantes`, interaction.user.id);
+    db.prepare("INSERT INTO caixa_log (tipo, valor, descricao, membro_discord_id) VALUES (?, ?, ?, ?)").run(
+      "acao", valorCaixa, `Acao — ${quantidadeMembros} participantes`, interaction.user.id,
+    );
   })();
 
-  let lista = "";
-  for (const p of participantes) {
-    lista += `<@${p.id}> — $${valorPorPessoa.toLocaleString()}\n`;
-  }
-
-  const embed = new EmbedBuilder()
-    .setColor(0x2ecc71)
-    .setTitle("Acao Registrada — Com Dinheiro")
-    .addFields(
-      { name: "Valor total gerado", value: `$${valorTotal.toLocaleString()}`, inline: true },
-      { name: "Participantes (70%)", value: `$${valorParticipantes.toLocaleString()}`, inline: true },
-      { name: "Caixa familia (30%)", value: `$${valorCaixa.toLocaleString()}`, inline: true },
-      { name: `Valor por pessoa (${participantes.length} participantes)`, value: lista },
-    )
-    .setFooter({ text: `Registrado por ${adminNome}` })
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle("Acao Registrada!")
+        .addFields(
+          { name: "Valor total", value: `$${valorTotal.toLocaleString()}`, inline: true },
+          { name: "Participantes", value: `${quantidadeMembros}`, inline: true },
+          { name: "\u200b", value: "\u200b", inline: true },
+          { name: "Caixa (70%)", value: `$${valorCaixa.toLocaleString()}`, inline: true },
+          { name: "Participantes (30%)", value: `$${valorParticipantes.toLocaleString()}`, inline: true },
+          { name: "Por membro", value: `$${valorPorMembro.toLocaleString()}`, inline: true },
+        )
+        .setFooter({ text: `Registrado por ${adminNome}` })
+        .setTimestamp(),
+    ],
+  });
 }
 
-async function semDinheiro(interaction: ChatInputCommandInteraction, participantes: User[], adminNome: string) {
-  const porte = interaction.options.getString("porte", true);
-  const valorPorPessoa = PAGAMENTO_FIXO[porte];
-  const totalNecessario = valorPorPessoa * participantes.length;
+async function historico(interaction: ChatInputCommandInteraction) {
   const semana = getSemanaAtual();
 
-  const caixa = db.prepare("SELECT saldo FROM caixa LIMIT 1").get() as { saldo: number };
+  const acoes = db
+    .prepare("SELECT * FROM acoes WHERE semana = ? ORDER BY id DESC")
+    .all(semana) as Array<{
+      id: number; valor_total: number; valor_caixa: number;
+      valor_por_membro: number; quantidade_membros: number;
+      registrado_por: string; criado_em: string;
+    }>;
 
-  if (caixa.saldo < totalNecessario) {
-    await interaction.reply({
-      content: `Saldo insuficiente. Caixa tem $${caixa.saldo.toLocaleString()}, necessario $${totalNecessario.toLocaleString()}.`,
-      ephemeral: true,
-    });
+  if (acoes.length === 0) {
+    await interaction.reply({ content: "Nenhuma acao registrada essa semana.", ephemeral: true });
     return;
   }
 
-  db.transaction(() => {
-    const acao = db.prepare(
-      "INSERT INTO acoes (tipo, porte, valor_total, valor_caixa, registrado_por, semana) VALUES (?, ?, ?, ?, ?, ?)",
-    ).run("sem_dinheiro", porte, totalNecessario, totalNecessario, interaction.user.id, semana);
+  const totalGerado = acoes.reduce((acc, a) => acc + a.valor_total, 0);
+  const totalCaixa = acoes.reduce((acc, a) => acc + a.valor_caixa, 0);
 
-    for (const p of participantes) {
-      db.prepare(
-        "INSERT INTO acao_participantes (acao_id, discord_id, valor_recebido) VALUES (?, ?, ?)",
-      ).run(acao.lastInsertRowid, p.id, valorPorPessoa);
-    }
-
-    db.prepare("UPDATE caixa SET saldo = saldo - ?").run(totalNecessario);
-    db.prepare(
-      "INSERT INTO caixa_log (tipo, valor, descricao, membro_discord_id) VALUES (?, ?, ?, ?)",
-    ).run("acao_pagamento", -totalNecessario, `Acao ${porte} sem dinheiro — ${participantes.length} participantes`, interaction.user.id);
-  })();
-
-  let lista = "";
-  for (const p of participantes) {
-    lista += `<@${p.id}> — $${valorPorPessoa.toLocaleString()}\n`;
+  let texto = "";
+  for (const a of acoes) {
+    texto += `\`#${a.id}\` $${a.valor_total.toLocaleString()} — ${a.quantidade_membros} membros | $${a.valor_por_membro.toLocaleString()}/pessoa (${a.criado_em})\n`;
   }
 
-  const embed = new EmbedBuilder()
-    .setColor(0x9b59b6)
-    .setTitle(`Acao Registrada — ${porte.charAt(0).toUpperCase() + porte.slice(1)} (Sem Dinheiro)`)
-    .addFields(
-      { name: "Valor por pessoa", value: `$${valorPorPessoa.toLocaleString()}`, inline: true },
-      { name: "Total pago pelo caixa", value: `$${totalNecessario.toLocaleString()}`, inline: true },
-      { name: "Novo saldo caixa", value: `$${(caixa.saldo - totalNecessario).toLocaleString()}`, inline: true },
-      { name: `Participantes (${participantes.length})`, value: lista },
-    )
-    .setFooter({ text: `Registrado por ${adminNome}` })
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x9b59b6)
+        .setTitle(`Acoes da Semana — ${semana}`)
+        .setDescription(texto)
+        .addFields(
+          { name: "Total gerado", value: `$${totalGerado.toLocaleString()}`, inline: true },
+          { name: "Total pro caixa", value: `$${totalCaixa.toLocaleString()}`, inline: true },
+        )
+        .setTimestamp(),
+    ],
+  });
 }

@@ -1,4 +1,4 @@
-import { Client, Collection, GatewayIntentBits, REST, Routes, ChannelType, ThreadAutoArchiveDuration } from "discord.js";
+import { Client, Collection, GatewayIntentBits, REST, Routes, ChannelType, ThreadAutoArchiveDuration, TextChannel } from "discord.js";
 import dotenv from "dotenv";
 import { initDatabase } from "./database/db";
 import db from "./database/db";
@@ -11,9 +11,7 @@ import * as relatorioCommand from "./commands/relatorio";
 import * as acaoCommand from "./commands/acao";
 import * as advertenciaCommand from "./commands/advertencia";
 import * as setupCommand from "./commands/setup";
-import * as dinheiroCommand from "./commands/dinheiro";
-import * as dividaCommand from "./commands/divida";
-import * as graficoCommand from "./commands/grafico";
+import { buildSaldoEmbed } from "./commands/setup";
 import * as guiaCommand from "./commands/guia";
 import * as parceriaCommand from "./commands/parceria";
 
@@ -35,7 +33,7 @@ if (!GUILD_ID) {
 initDatabase();
 console.log("Banco de dados inicializado.");
 
-const commands = [farmCommand, estoqueCommand, membroCommand, vendaCommand, caixaCommand, relatorioCommand, acaoCommand, advertenciaCommand, setupCommand, dinheiroCommand, dividaCommand, graficoCommand, guiaCommand, parceriaCommand];
+const commands = [farmCommand, estoqueCommand, membroCommand, vendaCommand, caixaCommand, relatorioCommand, acaoCommand, advertenciaCommand, setupCommand, guiaCommand, parceriaCommand];
 const commandMap = new Collection<string, { execute: (interaction: any) => Promise<void> }>();
 
 for (const cmd of commands) {
@@ -69,70 +67,38 @@ let botReady = false;
 client.once("ready", () => {
   console.log(`Bot online como ${client.user?.tag}`);
   botReady = true;
+
+  // Atualizar mensagem de saldo a cada 10 minutos
+  setInterval(async () => {
+    try {
+      const msgId = db.prepare("SELECT valor FROM bot_config WHERE chave = 'saldo_message_id'").get() as { valor: string } | undefined;
+      const channelId = db.prepare("SELECT valor FROM bot_config WHERE chave = 'saldo_channel_id'").get() as { valor: string } | undefined;
+      if (!msgId || !channelId) return;
+
+      const channel = await client.channels.fetch(channelId.valor) as TextChannel | null;
+      if (!channel) return;
+
+      const msg = await channel.messages.fetch(msgId.valor);
+      if (!msg) return;
+
+      const caixa = db.prepare("SELECT saldo FROM caixa LIMIT 1").get() as { saldo: number };
+      const estoque = db.prepare("SELECT material, quantidade FROM estoque ORDER BY material").all() as Array<{ material: string; quantidade: number }>;
+
+      await msg.edit({ embeds: [buildSaldoEmbed(caixa.saldo, estoque)] });
+    } catch {
+      // Ignora erros silenciosamente
+    }
+  }, 10 * 60 * 1000);
 });
 
 client.on("interactionCreate", async (interaction) => {
   if (!botReady) return;
 
-  // Handler de autocomplete
   if (interaction.isAutocomplete()) {
     const command = commandMap.get(interaction.commandName) as any;
     if (command?.autocomplete) {
       try { await command.autocomplete(interaction); } catch { /* ignora */ }
     }
-    return;
-  }
-
-  // Handler do botao abrir_lavagem
-  if (interaction.isButton() && interaction.customId === "abrir_lavagem") {
-    await interaction.deferReply({ ephemeral: true });
-
-    const membro = db
-      .prepare("SELECT * FROM membros WHERE discord_id = ? AND ativo = 1")
-      .get(interaction.user.id) as { id: number; nome: string } | undefined;
-
-    if (!membro) {
-      await interaction.editReply({ content: "Voce nao esta cadastrado na familia. Peca a um admin para te cadastrar." });
-      return;
-    }
-
-    const channel = interaction.channel;
-    if (!channel || channel.type !== ChannelType.GuildText) {
-      await interaction.editReply({ content: "Este botao so funciona em canais de texto." });
-      return;
-    }
-
-    const threadExistente = channel.threads.cache.find(
-      (t) => t.name === `lavagem-${membro.nome}` && !t.archived,
-    );
-
-    if (threadExistente) {
-      await interaction.editReply({ content: `Voce ja tem uma thread ativa: ${threadExistente}` });
-      return;
-    }
-
-    const thread = await channel.threads.create({
-      name: `lavagem-${membro.nome}`,
-      autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
-      type: ChannelType.PrivateThread,
-      reason: `Lavagem de ${membro.nome}`,
-    });
-
-    await thread.members.add(interaction.user.id);
-
-    const lideranca = db
-      .prepare("SELECT discord_id FROM membros WHERE ativo = 1 AND (cargo = 'lider' OR cargo = 'sublider')")
-      .all() as Array<{ discord_id: string }>;
-
-    for (const l of lideranca) {
-      await thread.members.add(l.discord_id);
-    }
-
-    await thread.send({
-      content: `Ola <@${interaction.user.id}>! Esta e sua thread privada de lavagem.\nUse \`/dinheiro registrar\` para registrar suas entregas.\nA lideranca foi adicionada automaticamente.`,
-    });
-
-    await interaction.editReply({ content: `Sua thread foi criada: ${thread}` });
     return;
   }
 
@@ -155,7 +121,6 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // Verificar se ja existe thread ativa para esse membro
     const threadExistente = channel.threads.cache.find(
       (t) => t.name === `farm-${membro.nome}` && !t.archived,
     );
@@ -165,7 +130,6 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // Criar thread privada
     const thread = await channel.threads.create({
       name: `farm-${membro.nome}`,
       autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
@@ -173,10 +137,8 @@ client.on("interactionCreate", async (interaction) => {
       reason: `Farm de ${membro.nome}`,
     });
 
-    // Adicionar o membro
     await thread.members.add(interaction.user.id);
 
-    // Adicionar lideranca
     const lideranca = db
       .prepare("SELECT discord_id FROM membros WHERE ativo = 1 AND (cargo = 'lider' OR cargo = 'sublider')")
       .all() as Array<{ discord_id: string }>;

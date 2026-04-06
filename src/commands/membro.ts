@@ -131,6 +131,17 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub
+      .setName("vip")
+      .setDescription("Ativar ou desativar VIP de um membro (admin)")
+      .addUserOption((opt) =>
+        opt.setName("usuario").setDescription("Usuario do Discord").setRequired(true),
+      )
+      .addBooleanOption((opt) =>
+        opt.setName("ativo").setDescription("true = ativar VIP | false = remover VIP").setRequired(true),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
       .setName("folga")
       .setDescription("Conceder ou remover folga de um membro (admin)")
       .addUserOption((opt) =>
@@ -184,6 +195,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await historicoCompleto(interaction);
   } else if (subcommand === "folga") {
     await folga(interaction);
+  } else if (subcommand === "vip") {
+    await vip(interaction);
   } else if (subcommand === "rebaixar") {
     await rebaixar(interaction);
   }
@@ -549,6 +562,43 @@ async function folga(interaction: ChatInputCommandInteraction) {
     .setTimestamp();
 
   await interaction.reply({ embeds: [embed] });
+}
+
+async function vip(interaction: ChatInputCommandInteraction) {
+  const usuario = interaction.options.getUser("usuario", true);
+  const ativo = interaction.options.getBoolean("ativo", true);
+
+  const membro = db
+    .prepare("SELECT * FROM membros WHERE discord_id = ? AND ativo = 1")
+    .get(usuario.id) as { id: number; nome: string; vip: number } | undefined;
+
+  if (!membro) {
+    await interaction.reply({ content: `**${usuario.displayName}** nao esta cadastrado ou esta inativo.`, ephemeral: true });
+    return;
+  }
+
+  if ((membro.vip === 1) === ativo) {
+    await interaction.reply({ content: `**${membro.nome}** ja ${ativo ? "possui" : "nao possui"} VIP.`, ephemeral: true });
+    return;
+  }
+
+  db.prepare("UPDATE membros SET vip = ? WHERE id = ?").run(ativo ? 1 : 0, membro.id);
+  registrarAuditoria(ativo ? "vip_ativado" : "vip_removido", interaction.user.id, usuario.id, membro.nome);
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(ativo ? 0xf1c40f : 0x95a5a6)
+        .setTitle(ativo ? "⭐ VIP Ativado" : "VIP Removido")
+        .addFields(
+          { name: "Membro", value: membro.nome, inline: true },
+          { name: "Status", value: ativo ? "⭐ VIP Ativo" : "Normal", inline: true },
+          { name: "Meta diária", value: ativo ? "1.300 pólvora / 1.300 cápsula" : "650 pólvora / 650 cápsula", inline: false },
+        )
+        .setFooter({ text: `Por ${interaction.user.displayName}` })
+        .setTimestamp(),
+    ],
+  });
 }
 
 async function historicoSemana(interaction: ChatInputCommandInteraction) {

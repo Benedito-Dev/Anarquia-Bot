@@ -229,6 +229,19 @@ function runMigrations(): void {
   if (!colunasMembros.some((c) => c.name === "folga_dia")) {
     db.exec("ALTER TABLE membros ADD COLUMN folga_dia TEXT");
   }
+  if (!colunasMembros.some((c) => c.name === "vip")) {
+    db.exec("ALTER TABLE membros ADD COLUMN vip INTEGER NOT NULL DEFAULT 0");
+  }
+
+  // Migration: criar tabela dominas_log se não existir
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dominas_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dia TEXT NOT NULL UNIQUE,
+      registrado_por TEXT NOT NULL,
+      criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
 
   // Migration: farm_entregas — se ainda tiver colunas antigas (cobres/aluminios), recriar
   const colunasFarm = db.prepare("PRAGMA table_info(farm_entregas)").all() as Array<{ name: string }>;

@@ -12,23 +12,38 @@ export function getDiaAtual(): string {
   return now.toISOString().slice(0, 10);
 }
 
-// Retorna meta semanal de polvora e capsula por cargo
-export function getMetaSemanal(cargo: string): { polvora: number; capsula: number } {
-  const metas: Record<string, { polvora: number; capsula: number }> = {
-    iniciante:          { polvora: 500, capsula: 500 },
-    membro:             { polvora: 1000, capsula: 1000 },
-    gerente:            { polvora: 0,   capsula: 0 },
-    "gerente de farm":  { polvora: 0,   capsula: 0 },
-    "gerente de acao":  { polvora: 0,   capsula: 0 },
-    sublider:           { polvora: 0,   capsula: 0 },
-    lider:              { polvora: 0,   capsula: 0 },
+// Meta diaria base (sem VIP, sem Dominas)
+export const META_DIARIA_BASE = { polvora: 650, capsula: 650 };
+
+// Retorna meta diaria considerando VIP e se hoje tem Dominas
+export function getMetaDiaria(vip: boolean, dominasHoje: boolean): { polvora: number; capsula: number } {
+  let mult = 1;
+  if (vip) mult *= 2;
+  if (dominasHoje) mult *= 2;
+  return {
+    polvora: META_DIARIA_BASE.polvora * mult,
+    capsula: META_DIARIA_BASE.capsula * mult,
   };
-  return metas[cargo.toLowerCase()] ?? { polvora: 360, capsula: 360 };
 }
 
+// Retorna meta semanal base (6 dias) + dias de Dominas na semana
+export function getMetaSemanal(cargo: string, vip = false, diasDominasSemana = 0): { polvora: number; capsula: number } {
+  if (!temMetaCargo(cargo)) return { polvora: 0, capsula: 0 };
+  const multVip = vip ? 2 : 1;
+  const baseDiaria = META_DIARIA_BASE.polvora * multVip;
+  // 6 dias normais + dias de dominas rendem o dobro (ja contam como 2x no dia)
+  const totalPolvora = baseDiaria * 6 + baseDiaria * diasDominasSemana;
+  return { polvora: totalPolvora, capsula: totalPolvora };
+}
+
+export function temMetaCargo(cargo: string): boolean {
+  const semMeta = ["gerente", "gerente de farm", "gerente de acao", "sublider", "lider"];
+  return !semMeta.includes(cargo.toLowerCase());
+}
+
+// Manter compatibilidade com codigo existente
 export function temMeta(cargo: string): boolean {
-  const meta = getMetaSemanal(cargo);
-  return meta.polvora > 0;
+  return temMetaCargo(cargo);
 }
 
 export function getCargoLabel(cargo: string): string {

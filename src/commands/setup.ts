@@ -24,6 +24,9 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub.setName("reset_semana").setDescription("Arquiva semana atual e reseta dados para nova semana (admin)"),
+  )
+  .addSubcommand((sub) =>
+    sub.setName("dominas").setDescription("Registrar que hoje teve Dominas — dobra a meta do dia (admin)"),
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -40,6 +43,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   if (sub === "limpar") await limpar(interaction, admin.nome);
   else if (sub === "reset_semana") await resetSemana(interaction, admin.nome);
   else if (sub === "saldo") await saldo(interaction);
+  else if (sub === "dominas") await dominas(interaction);
   else await farm(interaction);
 }
 
@@ -95,6 +99,33 @@ async function farm(interaction: ChatInputCommandInteraction) {
 
   await interaction.reply({ content: "Mensagem de farm postada!", ephemeral: true });
   await (interaction.channel as TextChannel).send({ embeds: [embed], components: [row] });
+}
+
+async function dominas(interaction: ChatInputCommandInteraction) {
+  const dia = new Date().toISOString().slice(0, 10);
+
+  const jaRegistrado = db.prepare("SELECT id FROM dominas_log WHERE dia = ?").get(dia);
+  if (jaRegistrado) {
+    await interaction.reply({ content: `Dominas já foi registrado hoje (${dia}).`, ephemeral: true });
+    return;
+  }
+
+  db.prepare("INSERT INTO dominas_log (dia, registrado_por) VALUES (?, ?)").run(dia, interaction.user.id);
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xf1c40f)
+        .setTitle("🏆 Dominas Registrado!")
+        .setDescription(`O evento Dominas foi registrado para hoje **${dia}**.\nA meta diária de todos os membros foi **dobrada**.`)
+        .addFields(
+          { name: "Normal", value: "1.300 pólvora / 1.300 cápsula", inline: true },
+          { name: "VIP", value: "2.600 pólvora / 2.600 cápsula", inline: true },
+        )
+        .setFooter({ text: `Registrado por ${interaction.user.displayName}` })
+        .setTimestamp(),
+    ],
+  });
 }
 
 async function limpar(interaction: ChatInputCommandInteraction, adminNome: string) {

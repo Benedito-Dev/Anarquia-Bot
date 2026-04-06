@@ -12,6 +12,7 @@ import {
   getSemanaAtual,
   getDiaAtual,
   getMetaSemanal,
+  getMetaDiaria,
   getCargoLabel,
   temMeta,
   calcularBonusFds,
@@ -20,6 +21,27 @@ import {
   CARGOS_GERENCIA,
 } from "../utils/semana";
 import { membroTemFolga } from "./membro";
+
+function dominasHoje(): boolean {
+  const dia = getDiaAtual();
+  return !!db.prepare("SELECT id FROM dominas_log WHERE dia = ?").get(dia);
+}
+
+function dominasSemana(semana: string): number {
+  // Conta quantos dias de dominas caem na semana atual
+  // Busca todos os dominas e filtra pelos que estao na semana
+  const logs = db.prepare("SELECT dia FROM dominas_log").all() as Array<{ dia: string }>;
+  return logs.filter((l) => getSemanaAtual() === semana && isDiaNaSemana(l.dia, semana)).length;
+}
+
+function isDiaNaSemana(dia: string, semana: string): boolean {
+  const date = new Date(dia);
+  const year = date.getFullYear();
+  const firstDay = new Date(year, 0, 1);
+  const days = Math.floor((date.getTime() - firstDay.getTime()) / (24 * 60 * 60 * 1000));
+  const week = Math.ceil((days + firstDay.getDay() + 1) / 7);
+  return `${year}-W${week.toString().padStart(2, "0")}` === semana;
+}
 
 const MUNICOES_POR_PRODUCAO = 170;
 const RANKING_POR_PAGINA = 5;
@@ -243,7 +265,7 @@ async function metas(interaction: ChatInputCommandInteraction) {
 
   const membro = db
     .prepare("SELECT * FROM membros WHERE discord_id = ?")
-    .get(discordId) as { id: number; cargo: string; nome: string } | undefined;
+    .get(discordId) as { id: number; cargo: string; nome: string; vip: number } | undefined;
 
   if (!membro) {
     await interaction.reply({ content: "Voce nao esta cadastrado.", ephemeral: true });
@@ -263,13 +285,22 @@ async function metas(interaction: ChatInputCommandInteraction) {
     return;
   }
 
+  const vip = membro.vip === 1;
+  const dominasAtivo = dominasHoje();
+  const diasDominas = dominasSemana(semana);
+
+  const metaDiaria = getMetaDiaria(vip, dominasAtivo);
+  const metaSemanal = getMetaSemanal(membro.cargo, vip, diasDominas);
+
+  // Progresso do dia
+  const totalHoje = db
+    .prepare("SELECT COALESCE(SUM(polvora), 0) as polvora, COALESCE(SUM(capsula), 0) as capsula FROM farm_entregas WHERE membro_id = ? AND DATE(criado_em) = ?")
+    .get(membro.id, dia) as { polvora: number; capsula: number };
+
+  // Progresso da semana
   const totalSemana = db
     .prepare("SELECT COALESCE(SUM(polvora), 0) as polvora, COALESCE(SUM(capsula), 0) as capsula, COUNT(*) as entregas FROM farm_entregas WHERE membro_id = ? AND semana = ?")
     .get(membro.id, semana) as { polvora: number; capsula: number; entregas: number };
-
-  const meta = getMetaSemanal(membro.cargo);
-  const progressoPolvora = meta.polvora > 0 ? Math.min(100, Math.round((totalSemana.polvora / meta.polvora) * 100)) : 100;
-  const progressoCapsula = meta.capsula > 0 ? Math.min(100, Math.round((totalSemana.capsula / meta.capsula) * 100)) : 100;
 
   const ganhosSemana = db
     .prepare("SELECT COALESCE(SUM(valor_pago), 0) as total FROM farmer_pagamentos fp JOIN farm_entregas fe ON fp.farm_entrega_id = fe.id WHERE fp.membro_id = ? AND fe.semana = ?")
@@ -279,18 +310,36 @@ async function metas(interaction: ChatInputCommandInteraction) {
     .prepare("SELECT COALESCE(SUM(valor), 0) as total FROM bonus_log WHERE membro_id = ? AND semana = ?")
     .get(membro.id, semana) as { total: number };
 
+  const progDiaPolvora = metaDiaria.polvora > 0 ? Math.min(100, Math.round((totalHoje.polvora / metaDiaria.polvora) * 100)) : 100;
+  const progDiaCapsula = metaDiaria.capsula > 0 ? Math.min(100, Math.round((totalHoje.capsula / metaDiaria.capsula) * 100)) : 100;
+  const progSemPolvora = metaSemanal.polvora > 0 ? Math.min(100, Math.round((totalSemana.polvora / metaSemanal.polvora) * 100)) : 100;
+  const progSemCapsula = metaSemanal.capsula > 0 ? Math.min(100, Math.round((totalSemana.capsula / metaSemanal.capsula) * 100)) : 100;
+
+  const diaBatido = totalHoje.polvora >= metaDiaria.polvora && totalHoje.capsula >= metaDiaria.capsula;
+  const semBatida = totalSemana.polvora >= metaSemanal.polvora && totalSemana.capsula >= metaSemanal.capsula;
+
+  const tags: string[] = [];
+  if (vip) tags.push("⭐ VIP");
+  if (dominasAtivo) tags.push("🏆 Dominas Ativo");
+
   const embed = new EmbedBuilder()
-    .setColor(progressoPolvora >= 100 && progressoCapsula >= 100 ? 0x00ae86 : 0xffa500)
-    .setTitle(`Meta Semanal — ${membro.nome}`)
+    .setColor(diaBatido && semBatida ? 0x00ae86 : diaBatido ? 0x3498db : 0xffa500)
+    .setTitle(`Meta — ${membro.nome}${tags.length ? " | " + tags.join(" ") : ""}`)
     .addFields(
       { name: "Cargo", value: getCargoLabel(membro.cargo), inline: true },
-      { name: "Entregas", value: `${totalSemana.entregas}`, inline: true },
+      { name: "Entregas semana", value: `${totalSemana.entregas}`, inline: true },
       { name: "\u200b", value: "\u200b", inline: true },
-      { name: "Polvora", value: `${gerarBarra(progressoPolvora)} ${progressoPolvora}%\n${totalSemana.polvora}/${meta.polvora}` },
-      { name: "Capsula", value: `${gerarBarra(progressoCapsula)} ${progressoCapsula}%\n${totalSemana.capsula}/${meta.capsula}` },
-      { name: "Ganhos farm", value: `$${ganhosSemana.total.toLocaleString()}`, inline: true },
-      { name: "Bonus", value: `$${bonusSemana.total.toLocaleString()}`, inline: true },
-      { name: "Total semana", value: `$${(ganhosSemana.total + bonusSemana.total).toLocaleString()}`, inline: true },
+      { name: `📅 Meta Diária (${dia})`, value:
+        `Pólvora: ${gerarBarra(progDiaPolvora)} ${progDiaPolvora}% — ${totalHoje.polvora}/${metaDiaria.polvora}\n` +
+        `Cápsula: ${gerarBarra(progDiaCapsula)} ${progDiaCapsula}% — ${totalHoje.capsula}/${metaDiaria.capsula}\n` +
+        (diaBatido ? "✅ Meta do dia batida!" : "❌ Meta do dia pendente") },
+      { name: `📊 Meta Semanal (${semana})`, value:
+        `Pólvora: ${gerarBarra(progSemPolvora)} ${progSemPolvora}% — ${totalSemana.polvora}/${metaSemanal.polvora}\n` +
+        `Cápsula: ${gerarBarra(progSemCapsula)} ${progSemCapsula}% — ${totalSemana.capsula}/${metaSemanal.capsula}\n` +
+        (semBatida ? "✅ Meta semanal batida!" : "❌ Meta semanal pendente") },
+      { name: "💰 Ganhos farm", value: `$${ganhosSemana.total.toLocaleString()}`, inline: true },
+      { name: "🎉 Bonus", value: `$${bonusSemana.total.toLocaleString()}`, inline: true },
+      { name: "📊 Total semana", value: `$${(ganhosSemana.total + bonusSemana.total).toLocaleString()}`, inline: true },
     )
     .setTimestamp();
 

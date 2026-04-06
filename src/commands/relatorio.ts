@@ -166,6 +166,8 @@ async function semana(interaction: ChatInputCommandInteraction) {
   });
 }
 
+const ROLES_FAMILIA = ["iniciante", "membros", "gerente", "sub dono", "dono"];
+
 async function dia(interaction: ChatInputCommandInteraction) {
   const hoje = getDiaAtual();
   const medalhas = ["🥇", "🥈", "🥉"];
@@ -177,7 +179,7 @@ async function dia(interaction: ChatInputCommandInteraction) {
 
   const rankingFarm = db
     .prepare(`
-      SELECT m.nome, m.cargo, m.id as membro_id,
+      SELECT m.nome, m.cargo, m.id as membro_id, m.discord_id,
         COALESCE(SUM(f.polvora), 0) as total_polvora,
         COALESCE(SUM(f.capsula), 0) as total_capsula
       FROM membros m
@@ -186,7 +188,7 @@ async function dia(interaction: ChatInputCommandInteraction) {
       GROUP BY m.id
       ORDER BY total_polvora DESC
     `)
-    .all(hoje) as Array<{ nome: string; cargo: string; membro_id: number; total_polvora: number; total_capsula: number }>;
+    .all(hoje) as Array<{ nome: string; cargo: string; membro_id: number; discord_id: string; total_polvora: number; total_capsula: number }>;
 
   let topFarmers = "";
   for (let i = 0; i < Math.min(3, rankingFarm.length); i++) {
@@ -230,6 +232,58 @@ async function dia(interaction: ChatInputCommandInteraction) {
 
   const caixa = db.prepare("SELECT saldo FROM caixa LIMIT 1").get() as { saldo: number };
 
+  // Presenca de farm
+  const membrosCadastrados = db
+    .prepare("SELECT discord_id, nome, id FROM membros WHERE ativo = 1")
+    .all() as Array<{ discord_id: string; nome: string; id: number }>;
+
+  const idsComFarmHoje = new Set(
+    (db.prepare("SELECT DISTINCT membro_id FROM farm_entregas WHERE DATE(criado_em) = ?").all(hoje) as Array<{ membro_id: number }>)
+      .map((r) => r.membro_id),
+  );
+
+  const idsComFolga = new Set(
+    (db.prepare("SELECT id FROM membros WHERE ativo = 1 AND folga_dia = ?").all(hoje) as Array<{ id: number }>)
+      .map((r) => r.id),
+  );
+
+  const farmaram: string[] = [];
+  const naoFarmaram: string[] = [];
+  const folga: string[] = [];
+
+  for (const m of membrosCadastrados) {
+    if (idsComFolga.has(m.id)) { folga.push(m.nome); continue; }
+    if (idsComFarmHoje.has(m.id)) farmaram.push(m.nome);
+    else naoFarmaram.push(m.nome);
+  }
+
+  // Membros no Discord com role da familia mas nao cadastrados no banco
+  const idsCadastrados = new Set(membrosCadastrados.map((m) => m.discord_id));
+  let naoCadastrados: string[] = [];
+
+  try {
+    const guild = interaction.guild;
+    if (guild) {
+      const membrosGuild = await guild.members.fetch();
+      membrosGuild.forEach((gm) => {
+        if (idsCadastrados.has(gm.id)) return;
+        const temRoleFamilia = gm.roles.cache.some((r) =>
+          ROLES_FAMILIA.includes(r.name.toLowerCase()),
+        );
+        if (temRoleFamilia) naoCadastrados.push(`<@${gm.id}>`);
+      });
+    }
+  } catch {
+    naoCadastrados = ["Erro ao buscar membros do servidor."];
+  }
+
+  const presencaFields = [
+    { name: `✅ Farmaram hoje (${farmaram.length})`, value: farmaram.length > 0 ? farmaram.join(", ") : "Nenhum.", inline: false },
+    { name: `❌ Nao farmaram hoje (${naoFarmaram.length})`, value: naoFarmaram.length > 0 ? naoFarmaram.join(", ") : "Todos farmaram!", inline: false },
+    { name: `⚠️ De folga (${folga.length})`, value: folga.length > 0 ? folga.join(", ") : "Nenhum.", inline: false },
+    { name: `👤 No Discord sem cadastro (${naoCadastrados.length})`, value: naoCadastrados.length > 0 ? naoCadastrados.join(", ") : "Nenhum.", inline: false },
+  ];
+
   await interaction.reply({
     embeds: [
       new EmbedBuilder()
@@ -240,7 +294,9 @@ async function dia(interaction: ChatInputCommandInteraction) {
           { name: "🏆 Top Farmers", value: topFarmers || "Nenhum farm registrado." },
           { name: `🛒 Vendas — ${totalVendas.vendas} vendas | ${totalVendas.municoes} municoes | $${totalVendas.receita.toLocaleString()}`, value: topVendasText || "Nenhuma venda registrada." },
           { name: `⚔️ Acoes (${acoesDia.length}) — Caixa recebeu $${totalAcoesCaixa.toLocaleString()}`, value: acoesText || "Nenhuma acao registrada." },
-          { name: "💰 Saldo Caixa", value: `$${caixa.saldo.toLocaleString()}`, inline: true },
+          { name: "💰 Saldo Caixa", value: `$${caixa.saldo.toLocaleString()}`, inline: false },
+          { name: "━━━ Presenca de Farm ━━━", value: "\u200b" },
+          ...presencaFields,
         )
         .setTimestamp(),
     ],
